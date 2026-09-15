@@ -1,0 +1,6 @@
+results/*
+robustness/*
+runs/*
+logs/*
+checkpoints/*
+clip/ViT-L-14.pt
