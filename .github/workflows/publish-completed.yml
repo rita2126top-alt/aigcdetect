@@ -1,0 +1,112 @@
+name: Validate and publish completed implementation
+on:
+  push:
+    branches: [main]
+    paths: ['.delivery/checked-v2.part*.xz', '.github/workflows/publish-completed.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: publish-completed-v2
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      OMP_NUM_THREADS: '2'
+      MKL_NUM_THREADS: '2'
+      OPENBLAS_NUM_THREADS: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Verify and unpack the locally tested source package
+        run: |
+          python - <<'PY'
+          import hashlib, json, lzma
+          from pathlib import Path, PurePosixPath
+          packed = b''.join(Path(f'.delivery/checked-v2.part{i}.xz').read_bytes() for i in range(5))
+          assert hashlib.sha256(packed).hexdigest() == 'c68ee0af5c55ca568282b920cf9a566ec8420d997015cbe925db09d6c9bc18a5'
+          raw = lzma.decompress(packed)
+          assert hashlib.sha256(raw).hexdigest() == '32188e0849e19d165639dd20f1fe36e7ddaf021c3249326a47e4a6f5a6c6779d'
+          packet = json.loads(raw)
+          assert packet['format'] == 'aigcdetect-checked-delivery-v2'
+          assert len(packet['files']) == 53
+          paths = [item['path'] for item in packet['files']]
+          assert len(set(paths)) == len(paths)
+          allowed = {'README.md', 'environment.yml', 'pyproject.toml', 'requirements-runtime.txt', 'requirements.txt'}
+          prefixes = {'aigcdetect', 'configs', 'docs', 'tools', 'tests', 'scripts', 'provenance'}
+          for item in packet['files']:
+              name = PurePosixPath(item['path'])
+              assert not name.is_absolute() and '..' not in name.parts
+              assert str(name) in allowed or name.parts[0] in prefixes
+              dest = Path(name)
+              assert not any(x.is_symlink() for x in [dest, *dest.parents])
+              current = hashlib.sha256(dest.read_bytes()).hexdigest() if dest.exists() else None
+              assert current in (item['before'], item['sha256']), f'Concurrent edit: {name}'
+              assert item['mode'] in ('0o644', '0o755')
+              data = item['content'].encode('utf-8')
+              assert hashlib.sha256(data).hexdigest() == item['sha256'], name
+          for item in packet['files']:
+              dest = Path(item['path'])
+              dest.parent.mkdir(parents=True, exist_ok=True)
+              dest.write_bytes(item['content'].encode('utf-8'))
+              dest.chmod(int(item['mode'], 8))
+          Path('/tmp/aigcdetect-delivery-manifest.json').write_bytes(raw)
+          print('Verified and unpacked 53 files without changing original PPM-CLIP sources.')
+          PY
+      - name: Install pinned CPU reference environment
+        run: |
+          python -m pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -r requirements-runtime.txt
+          python -m pip install -e . --no-deps
+      - name: Run static checks, upstream integrity checks and CPU integration tests
+        run: python tools/validate_delivery.py --output validation
+      - name: Publish only the checked files
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, subprocess
+          from pathlib import Path
+          raw = Path('/tmp/aigcdetect-delivery-manifest.json').read_bytes()
+          assert hashlib.sha256(raw).hexdigest() == '32188e0849e19d165639dd20f1fe36e7ddaf021c3249326a47e4a6f5a6c6779d'
+          packet = json.loads(raw)
+          for item in packet['files']:
+              assert hashlib.sha256(Path(item['path']).read_bytes()).hexdigest() == item['sha256'], item['path']
+          report = json.loads(Path('validation/summary.json').read_text())
+          assert report['cpu_tests'] == 'passed' and report['tests'] == 35
+          report.update(workflow_run_id=os.environ['GITHUB_RUN_ID'],
+                        staging_commit=os.environ['GITHUB_SHA'],
+                        package_sha256=hashlib.sha256(raw).hexdigest())
+          Path('provenance/ci_validation.json').write_text(json.dumps(report, indent=2) + '\n')
+          subprocess.run(['git', 'add', '--', *[x['path'] for x in packet['files']], 'provenance/ci_validation.json'], check=True)
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if ! git diff --cached --quiet; then
+            git commit -m 'Complete detector, full experiment workflows and Chinese guide; pass 35 CPU tests'
+            git push origin HEAD:main
+          fi
+      - name: Bundle the exact published source and test evidence
+        run: |
+          mkdir -p /tmp/aigcdetect-final
+          cp -r validation /tmp/aigcdetect-final/
+          git rev-parse HEAD > /tmp/aigcdetect-final/COMMIT.txt
+          tar --exclude='./.git' --exclude='./PPM_CLIP/.git' --exclude='./.delivery' --exclude='./validation' --exclude='__pycache__' --exclude='.pytest_cache' --exclude='*.egg-info' -czf /tmp/aigcdetect-final/source.tar.gz .
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reference-cpu-validation
+          path: validation/
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@v4
+        with:
+          name: completed-project-validation
+          path: /tmp/aigcdetect-final/
+          retention-days: 30
