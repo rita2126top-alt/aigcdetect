@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+OUT="${1:-$ROOT/weights/clip/ViT-L-14.pt}"
+mkdir -p "$(dirname "$OUT")"
+URL="https://openaipublic.azureedge.net/clip/models/b8cca3fd41ae0c99ba7e8951adf17d267cdb84cd88be6f7c2e0eca1737a03836/ViT-L-14.pt"
+echo "Downloading OpenAI CLIP ViT-L/14 -> $OUT"
+curl -L --fail --retry 5 "$URL" -o "$OUT"
+echo "b8cca3fd41ae0c99ba7e8951adf17d267cdb84cd88be6f7c2e0eca1737a03836  $OUT" | sha256sum -c -

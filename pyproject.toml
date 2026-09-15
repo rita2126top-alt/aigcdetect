@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aigcdetect"
+version = "0.1.0"
+description = "Class-anchored dynamic probabilistic PPM-CLIP for AI-generated image detection"
+requires-python = ">=3.10"
+dependencies = ["numpy", "pillow", "scikit-learn", "pyyaml", "tqdm", "loguru", "ftfy", "regex"]
+
+[tool.setuptools.packages.find]
+include = ["aigcdetect*"]
