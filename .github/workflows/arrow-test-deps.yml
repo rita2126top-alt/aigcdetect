@@ -13,7 +13,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - run: python -m pip download datasets==3.6.0 pyarrow==20.0.0 huggingface_hub==0.34.4 --only-binary=:all: --dest wheels
+      - run: |
+          python -m pip download datasets==3.6.0 pyarrow==20.0.0 huggingface_hub==0.34.4 --only-binary=:all: --dest wheels
       - uses: actions/upload-artifact@v4
         with:
           name: arrow-test-wheels
