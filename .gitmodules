@@ -1,0 +1,3 @@
+[submodule "PPM_CLIP"]
+	path = PPM_CLIP
+	url = https://github.com/bandaidssssss/PPM_CLIP.git
