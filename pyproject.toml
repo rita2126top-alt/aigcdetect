@@ -7,10 +7,7 @@ name = "aigcdetect"
 version = "0.2.0"
 description = "Class-anchored dynamic probabilistic PPM-CLIP for AI-generated image detection"
 requires-python = ">=3.10"
-dependencies = ["torch>=2.5,<3", "torchvision>=0.20,<0.26", "numpy>=1.26,<3", "pillow>=10.4,<12", "scikit-learn>=1.6,<2", "pyyaml>=6", "tqdm", "loguru", "ftfy", "regex"]
+dependencies = ["numpy", "pillow", "scikit-learn", "pyyaml", "tqdm", "loguru", "ftfy", "regex"]
 
 [tool.setuptools.packages.find]
-include = ["aigcdetect*"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
+include = ["aigcdetect*", "cadp*"]

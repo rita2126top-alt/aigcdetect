@@ -1,479 +1,406 @@
-# AIGCDetect：从零开始的远程 GPU 运行指南
+# 从零开始运行：PPM-CLIP 原版与 CADP-CLIP 新方法
 
-## 0. 先明确交付内容与实验边界
+## 0. 先区分三个层次
 
-本项目在原始 PPM-CLIP 之上新增独立实现，不修改 `PPM_CLIP/` 中的原始代码。上游固定为 `bandaidssssss/PPM_CLIP@09d05b9fc4be6a2b079356bbf337a05e193db0be`；根目录也保留其原始代码副本。`requirements.txt` 恢复为上游原文件；**新项目使用 `environment.yml` 和 `requirements-runtime.txt`，不要混用旧依赖文件**。
+本指南默认服务器是 **Linux x86_64 + NVIDIA GPU**，你有自己的账号及可写数据盘。Windows 电脑只用来 SSH 登录；训练命令在服务器终端里执行。服务器是 ARM、非 NVIDIA 或已有集群模块环境时，需要调整环境安装部分，不能照搬 x86_64 安装包。
 
-新方法按照用户提供的设计实现：两个 Real/Fake 类别锚点、共享/图像私有概率提示、动态长度路由、10 层 Planar Flow、context→patch Cross-Attention、交互式文本原型、视觉 LoRA 和六项训练损失。默认参数保持 ViT-L/14、K=2、共享3/private最多7、长度候选1/3/5/7、训练采样1/测试采样10、batch48、100 epochs。没有用简化分类器替代新方法。
+`CPU 单元测试`检查程序和算法契约；`真实 GPU preflight`检查你的权重、数据与硬件能否完成一次真实前向、反向及优化器更新；`正式训练与评测`才能产生有研究意义的指标。三者不能互相冒充。交付验证记录见 `VALIDATION_REPORT.md`，没有预先填入论文成绩。
 
-需要区分三件事：**代码功能测试通过，不代表已经完成真实数据集全量训练，更不代表达到论文性能。** 交付前在本地 CPU 上运行了实际上游 CLIP 小型随机权重的训练、反向、断点恢复、推理和数据管线测试；它保留24层视觉网络，但宽度/输入分辨率缩小，不是正式预训练 ViT-L/14。具体证据见 `VALIDATION_ZH.md` 和 `provenance/local_validation.json`。真实 GPU、驱动、显存、正式权重和数据集的最终联合验证要在你的服务器执行本指南的环境检查命令。本项目没有伪造任何 ACC/AP/AUC 结果。
+主程序不会偷偷联网下载模型或数据。只有显式执行 `download-model` / `download-data --execute` 才联网。下载的图片、预训练模型、训练 checkpoint 都保存在仓库外的本地目录，不上传 GitHub。
 
-用户的方法文件没有指定完整的数据集划分协议；这里提供的 **GenImage SD1.4 训练源、按内容分组的10%训练内验证集、8生成器测试** 是明确的工程实验配置，不声称与上游论文原划分完全一致。Ojha 8域和19域配置也分别命名，不能混用平均指标。
+本次源码的正式入口是 `cadp/`，不是仓库中前次交付遗留的 `aigcdetect/`、`tools/` 和 `scripts/run_*.sh`。旧文件保留供追溯；本指南只指向已经验收的 CADP 入口。`PPM_CLIP/` 必须存在，导入与 SHA256 校验都指向这个固定版本的目录。
 
-## 1. 登录服务器与安装 Conda
+本地完整 ZIP 已包含该目录；ZIP 不包含 Git 历史，不能把它当成已经推送的 Git 提交。发布状态见 `docs/DELIVERY_STATUS.md`。
 
-下面假设服务器为 **Linux x86_64 + NVIDIA GPU**。`username`、`server-address`、`/data/rita` 是你需要替换的示例，不是已连接的服务器。Windows 本机只负责 SSH；训练命令在服务器上执行。
+## 1. 登录服务器与安装 conda
 
-```bash
-# 在本机终端登录远程服务器；替换账户和地址。
-ssh username@server-address
-
-# 在服务器确认系统和架构。不是 x86_64 时不要用下方 x86_64 安装包。
-uname -s
-uname -m
-
-# 查看 GPU、驱动和显存。此命令失败时先找服务器管理员处理驱动/设备分配。
-nvidia-smi
-
-# 已安装 Conda 时，执行 conda --version 后直接跳到下一节。
-conda --version
-```
-
-未安装 Conda 才执行以下命令。安装脚本来自 Anaconda 官方分发目录；在执行脚本前，按官方目录给出的 SHA256 校验下载文件，并阅读适用许可。不要覆盖已有的 `$HOME/miniconda3` 安装。
+先在自己电脑终端执行下面一行，替换两个占位符：
 
 ```bash
-# 下载 Linux x86_64 Miniconda 安装脚本到用户主目录。
-cd "$HOME"
-curl -fL https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -o miniconda.sh
-
-# 显示 SHA256，与官方分发目录发布的对应文件校验值核对。
-sha256sum miniconda.sh
-
-# 安装到个人目录，无需 sudo；需要先完成上面的校验。
-bash miniconda.sh -b -p "$HOME/miniconda3"
-
-# 在当前终端加载 Conda，之后才能使用 conda activate。
-source "$HOME/miniconda3/etc/profile.d/conda.sh"
+ssh YOUR_USER@YOUR_SERVER  # 登录你的服务器；认证方式由你的服务器决定。
 ```
 
-官方参考：<https://repo.anaconda.com/miniconda/>、<https://docs.conda.io/projects/conda/en/latest/user-guide/install/linux.html>。
-
-## 2. 拉取项目；旧副本不要强制覆盖
+登录后执行：
 
 ```bash
-# 创建代码父目录，不会删除已有目录。
-mkdir -p "$HOME/projects"
-cd "$HOME/projects"
-
-# 首次下载：同时拉取固定版本的 PPM-CLIP 子模块。
-git clone --recurse-submodules https://github.com/rita2126top-alt/aigcdetect.git
-cd aigcdetect
-
-# 检查当前提交及子模块状态，便于记录实验来源。
-git log -1 --oneline
-git submodule status
+uname -m                 # 确认 CPU 架构；下方安装包只适用于 x86_64。
+nvidia-smi               # 检查 NVIDIA 驱动能否看到 GPU；记下显存和驱动信息。
+conda --version          # 检查是否已有 conda；已有可用 conda 时跳过下面安装块。
 ```
 
-已经有旧副本时，不要再次 clone 到同名目录，也不要 `git reset --hard`。先 `git status`，把自己的配置复制到仓库之外；已有代码改动需先提交或自行合并，再执行：
+没有 conda 时，以下是用户目录安装方式，不需要 sudo。先核对官方安装页面及安装包校验值，再运行安装器。下载页及许可证要求以官方为准。
 
 ```bash
-# 只允许快进更新，避免意外合并或覆盖本地提交。
-git pull --ff-only
-
-# 补齐并更新到仓库指定的原版子模块提交。
-git submodule update --init --recursive
+mkdir -p "$HOME/installers"  # 创建安装包保存目录。
+curl -fL https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -o "$HOME/installers/miniconda.sh"  # 下载官方 Linux x86_64 安装器。
+sha256sum "$HOME/installers/miniconda.sh"  # 与官方 Miniconda 下载索引中的 SHA256 对照，不要忽略校验不一致。
+bash "$HOME/installers/miniconda.sh" -b -p "$HOME/miniconda3"  # 阅读并接受相应许可后，安装到自己的 HOME。
+source "$HOME/miniconda3/etc/profile.d/conda.sh"  # 在当前 shell 中启用 conda activate。
 ```
 
-## 3. 创建项目环境
+安装参考：<https://www.anaconda.com/docs/getting-started/installation>；校验值索引：<https://repo.anaconda.com/miniconda/>。已有环境不要重复向同一目录安装。
 
-默认环境采用固定的 Python3.10、PyTorch2.5.1、torchvision0.20.1、CUDA12.1运行时。这是兼容基线，不是“最新版本”，也不是对所有新 GPU 的通用承诺。PyTorch 官方版本组合参考：<https://pytorch.org/get-started/previous-versions/>。驱动或 GPU 架构不兼容时，根据官方支持矩阵另外建立环境；不要仅替换 torchvision 而保留不匹配的 torch。
+## 2. 克隆代码、创建隔离环境
+
+**完整 ZIP 用户**：解压后先 `cd` 到其中的 `aigcdetect/`；跳过下面的 `git clone`、`cd aigcdetect` 和 `git submodule update`，直接从 `conda env create` 开始。ZIP 已携带完整上游目录，但没有 `.git`。**GitHub 克隆用户**：先按 `DELIVERY_STATUS.md` 确认这次补丁已经推送，再执行下面整个命令块。
 
 ```bash
-# 必须在仓库根目录运行：按 YAML 创建名为 aigcdetect 的 Conda 环境。
-conda env create -f environment.yml
-
-# 激活后，python/pip 指向该环境。
-conda activate aigcdetect
-
-# 安装当前工程。依赖已由环境安装，--no-deps 避免重新替换 torch。
-python -m pip install -e . --no-deps
-
-# 显示解释器位置，并检查包依赖关系。
-which python
-python -m pip check
-
-# 检查 CUDA 是否真的可用；只看 nvidia-smi 不能代替这个检查。
-python -c "import torch,torchvision; print('torch',torch.__version__,'vision',torchvision.__version__,'CUDA runtime',torch.version.cuda,'available',torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'NO CUDA')"
+mkdir -p "$HOME/projects"                         # 为源码创建目录。
+cd "$HOME/projects"                              # 进入源码目录。
+git clone --recurse-submodules https://github.com/rita2126top-alt/aigcdetect.git  # 获取原 PPM 快照和新增完整实现。
+cd aigcdetect                                    # 后续相对路径命令均从仓库根目录执行。
+git submodule update --init --recursive           # 已克隆过仓库时补齐固定版本的 PPM_CLIP；不更新到上游最新提交。
+conda env create -f environment-cadp.yml          # 创建名为 cadp、Python 3.11 的隔离环境并安装普通依赖。
+conda activate cadp                              # 让 python 和 pip 都使用该环境。
+bash scripts/cadp/install_gpu.sh cu126            # 安装匹配的 torch 2.10.0 / torchvision 0.25.0 CUDA 12.6 wheel，并检查依赖。
+export PYTHONDONTWRITEBYTECODE=1                  # 不改写上游已经跟踪的 .pyc 文件。
+export OMP_NUM_THREADS=4                          # 限制每个进程的 CPU 线程，避免数据加载/线性代数过度抢占。
+python -m cadp.cli doctor                         # 打印 Python、PyTorch、CUDA 和关键模块导入状态。
+python -m cadp.cli verify-upstream                # 校验原始 47 个文件是否逐字节保持不变。
 ```
 
-每次重新 SSH 登录，需要重新 `source .../conda.sh`（若 shell 尚未初始化）并 `conda activate aigcdetect`。已有同名环境时，先确认其中没有其他项目依赖，不要盲目删除；可用 `conda env create -n aigcdetect_v2 -f environment.yml` 创建独立环境。
+这里固定的是一个经过 CPU 代码测试的版本组合，不宣称是当前最新版本。PyTorch 官方提供此组合的 `cu126`、`cu128`、`cu130` 和 `cpu` 安装选项：<https://pytorch.org/get-started/previous-versions/>。`install_gpu.sh` 接受这四种参数。
 
-仅做 CPU 开发检查时也可使用 Conda 管理解释器，再装 CPU torch：
+选择 CUDA wheel 必须匹配实际 GPU 架构和驱动。`nvidia-smi` 的 CUDA 字样不等于当前 Python 已安装了 GPU 版 torch。若 `doctor` 显示 `cuda_available: false`，应修复环境/驱动或联系服务器管理员，而不是把正式配置改成 CPU 来掩盖问题。新架构 GPU 可能需要不同 wheel；不要因为本文示例用了 cu126 就假定所有 GPU 都能用它。
+
+原版依赖请以 `PPM_CLIP/requirements.txt` 为准；根目录另有前次交付遗留的依赖文件。**不要在新环境里再执行 `pip install -r requirements.txt` 混装两套 torch。** 本交付使用 `requirements-cadp.txt`；子模块中的原始依赖文件仍然原封不动保留。新环境创建完成后可保存安装记录：
 
 ```bash
-# 创建独立的 CPU 验证环境，不修改正式 GPU 环境。
-conda create -n aigcdetect_cpu python=3.10 pip -y
-conda activate aigcdetect_cpu
-python -m pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cpu
-python -m pip install -r requirements-runtime.txt
-python -m pip install -e . --no-deps
+python -m pip freeze > "$HOME/cadp-pip-freeze.txt"  # 保存实际安装版本供复现，而不是只记录宽泛的依赖区间。
+conda env export > "$HOME/cadp-environment-export.yml"  # 保存 conda 层面的环境记录。
 ```
 
-## 4. 把所有本地路径集中到自己的 YAML
+## 3. 设置本地目录与 YAML
 
-建议将个人配置放在仓库之外，拉取更新时不会冲突。默认相对路径统一相对于**仓库根目录**，不是当前终端，也不是 YAML 所在目录；`extends` 文件路径例外，按子 YAML 所在位置解析。路径支持 `~` 和环境变量展开。
+示例把数据盘设为 `/data/aigcdetect`。没有该目录权限时，改成自己的可写目录，例如 `/home/你的用户名/aigcdetect_data`。不要强行给公共数据盘修改权限。
 
 ```bash
-# 将完整默认配置复制到个人配置目录。
-mkdir -p "$HOME/aigcdetect_configs"
-cp configs/default.yaml "$HOME/aigcdetect_configs/genimage.yaml"
-
-# 设置当前 shell 使用的配置文件；本项目所有 shell 包装脚本都支持 CONFIG。
-export CONFIG="$HOME/aigcdetect_configs/genimage.yaml"
-
-# 创建示例数据、权重和结果目录；按服务器实际存储位置修改 /data/rita。
-mkdir -p /data/rita/aigcdetect/{weights,datasets,outputs}
-
-# 编辑 YAML；不会自动下载任何数据。
-nano "$CONFIG"
+mkdir -p /data/aigcdetect/{models,datasets,manifests,runs,experiments}  # 分开存放模型、数据、索引、训练输出和实验矩阵。
+cp configs/cadp/default.yaml configs/cadp/server.yaml               # 创建自己的配置，不改默认模板。
+nano configs/cadp/server.yaml                                     # 编辑路径和硬件相关设置；也可使用熟悉的编辑器。
 ```
 
-主要字段可改为：
+至少检查以下字段：
 
 ```yaml
 paths:
-  ppmclip_root: ./PPM_CLIP
-  clip_model: /data/rita/aigcdetect/weights/ViT-L-14.pt
-  output_dir: /data/rita/aigcdetect/outputs/genimage_full
-  genimage_snapshot: /data/rita/aigcdetect/datasets/GenImage_arrow
-  genimage_export: /data/rita/aigcdetect/datasets/GenImage_raw
-  download_dir: /data/rita/aigcdetect/datasets/downloads
-  suite_output: /data/rita/aigcdetect/outputs/genimage_suite
-runtime:
-  device: cuda:0
-# data 下其他字段保持原配置，只修改下面三个根目录。
-data:
-  train_root: /data/rita/aigcdetect/datasets/GenImage_SD14/train
-  val_root: /data/rita/aigcdetect/datasets/GenImage_SD14/val
-  test_root: /data/rita/aigcdetect/datasets/GenImage
+  clip_checkpoint: /data/aigcdetect/models/ViT-L-14.pt
+  data_root: /data/aigcdetect/datasets
+  manifest_dir: /data/aigcdetect/manifests
+  output_dir: /data/aigcdetect/runs/main_seed42
+model:
+  method: cadp
+  tiny: false
+  checkpoint_blocks: true
+  text_chunk_size: 8
+train:
+  device: cuda
+  amp: bf16
+  epochs: 100
+  batch_size: 2
+  accumulation_steps: 24
 ```
 
-**这是局部示例，不要用它覆盖整个文件**，否则会丢失 model/training 等必要配置。默认配置中的所有字段及超参数都可调整。单次命令也能用 `--set`：
+**YAML 中的 `batch_size` 是每次送入网络的 microbatch。** 默认 `2 × 24 = 48` 是单次优化更新的有效 batch size。附件要求的 48 不会被误当成默认每次只训练 2 张。尾部不满一个累积窗口时按真实样本数归一化，不丢弃尾部梯度。
+
+梯度累积与真正一次送入 48 张并不在所有随机细节上完全相同：每个 microbatch 会重新采样 shared latent。若要一次物理 batch=48，可设置 `batch_size: 48, accumulation_steps: 1`，但显存能否容纳必须实测，交付时未测得任何显存容量保证。
+
+显存不足时先把 microbatch 改为 1、累积改为 48，并保持 `checkpoint_blocks: true`；还可把 `text_chunk_size` 改成 4 或 2。减小 `eval.batch_size` 可降低测试显存。不要为了节省显存偷偷把 `model.tiny` 改成 true 用于论文实验。
+
+不支持 bf16 的卡改 `train.amp: fp16` 或 `off`。FP16 使用动态 GradScaler，`train.grad_scaler_init_scale` 默认 256；遇到溢出会跳过该次优化更新并降低 scale，日志记录 `skipped_amp_steps`。一整轮都未成功更新时立即报错，不把空训练当成功。`off` 是精度模式字符串，本项目正确处理它，不会将其误解成 False。
+
+每条命令都可以临时覆盖配置，多个 `--set` 必须分别写：
 
 ```bash
-# 仅对本次命令选择 GPU1；不会写回 YAML。
-python tools/check_env.py --config "$CONFIG" --stage infer --set runtime.device=cuda:1
+python -m cadp.cli doctor --config configs/cadp/server.yaml --set train.device=cuda:0  # 仅为本次命令覆盖设备，不改 YAML。
 ```
 
-`--set` 支持已有的点分隔键，拼错键名会报错，不会悄悄忽略。列表覆盖示例为 `--set 'data.test_sets=[ADM,BigGAN]'`。单卡运行使用一个 `cuda:N`；当前训练器不实现 DDP，不要用 `torchrun` 冒充多卡支持。可在不同 GPU 上启动不同种子的独立进程，必须使用不同输出目录。
-
-## 5. 下载正式 CLIP 到本地
+## 4. 下载并校验本地 CLIP
 
 ```bash
-# 查看目标文件、正式 OpenAI 下载地址和预期 SHA256，不进行下载。
-bash scripts/download_clip.sh --dry-run
-
-# 下载到 paths.clip_model；支持 .partial 断点文件，完成后校验官方 URL 中的 SHA256。
-bash scripts/download_clip.sh
+python -m cadp.cli download-model --config configs/cadp/server.yaml  # 下载官方 ViT-L/14 到 paths.clip_checkpoint，并校验完整 SHA256。
+sha256sum /data/aigcdetect/models/ViT-L-14.pt                        # 独立复核文件哈希。
 ```
 
-训练、评测和推理只读 `paths.clip_model`，不会联网自动补模型。既可读正式 OpenAI TorchScript checkpoint，也可读受支持的本地 CLIP state_dict。推理必须使用与训练相同的骨干权重，adapter 检查点会记录并检查其 SHA256。测试生成的随机 tiny 权重不可用作正式实验权重。
-
-若权重已手动放在服务器，直接设置该路径即可；不必重复下载。下载器遇到不同 SHA256 的已有正式目标文件会拒绝覆盖，需先查清文件来源后手动另存。
-
-## 6. 下载 GenImage 并正确划分 train/val/test
-
-数据镜像：<https://huggingface.co/datasets/nebula/GenImage-arrow>。其每个 `data/<split>/<generator>/` 是独立 Arrow/save_to_disk 数据集。**镜像的 validation 是 test 的别名，不能拿它做模型选择的验证集。** 本项目从 SD1.4 的训练源另划验证集；测试图片不参加训练或模型选择。
-
-镜像总量很大。默认 `--mode paper` 只是历史命名的下载组合：**SD1.4 训练源 + 八个生成器测试集**，不是整站全部训练数据，也不表示复现某篇论文的原始协议。`--mode test` 只下载八域测试，`--mode all-train` 下载所有训练源与测试源；后者不会自动执行8×8交叉生成器训练。下载前检查镜像页面的体积、你的磁盘配额及适用许可；源码仓库不附带数据集授权。
-
-```bash
-# 查看当前空闲空间。Arrow快照与导出图片会同时占用空间。
-df -h /data/rita/aigcdetect
-
-# 查询镜像的实际 revision 和匹配文件模式，打印计划，不下载图片。
-bash scripts/download_genimage_hf.sh --mode paper --dry-run
-
-# 实际下载默认训练源和八域测试；将解析出的 commit revision 写入 DOWNLOAD_MANIFEST.json。
-bash scripts/download_genimage_hf.sh --mode paper
-
-# 原字节导出训练/测试图片，并从训练源生成独立 train/val 目录。
-python tools/prepare_genimage.py --config "$CONFIG" --stage all
-```
-
-导出器支持真实嵌入式 bytes 列、Hugging Face Image 字段，以及 Arrow IPC 流/文件。它校验标签、可用的源 MD5 和图片编码；直接保存原始字节，**不会统一重新编码成 JPEG**。生成 `export_manifest.csv`，记录源路径、标签、SHA256和目标相对路径。相同来源可以重跑；源身份不同或发现残留图片会拒绝混入旧导出目录，应选择新的输出目录。
-
-训练划分按 SHA256 对重复图片分组，再按类别、固定种子选择验证组，同一原图的副本不会跨 train/val。默认约10%的唯一内容组用于验证；因为组大小不同，图片数量比例不一定恰好10%。默认以符号链接建立 train/val，节省重复存储；不要删除或移动 `genimage_export`。不便使用符号链接时，从新的空目录用 `--copy` 准备一份独立副本。
-
-最终目录：
+期望 SHA256 为：
 
 ```text
-GenImage_arrow/data/train/stable_diffusion_v_1_4/  # 原始 Arrow
-GenImage_raw/train/stable_diffusion_v_1_4/
-  0_real/*.jpg|png|...
-  1_fake/*.jpg|png|...
-  export_manifest.csv
-GenImage_SD14/
-  train/0_real/...     train/1_fake/...
-  val/0_real/...       val/1_fake/...
-GenImage/
-  ADM/0_real/...       ADM/1_fake/...
-  BigGAN/...
+b8cca3fd41ae0c99ba7e8951adf17d267cdb84cd88be6f7c2e0eca1737a03836
+```
+
+下载器使用 `.part` 文件断点续传，校验通过后才重命名为正式文件。正式文件存在但哈希不符时拒绝覆盖；先检查是不是下载损坏或拿错了模型，再由你明确移动错误文件。中断留下的 `.part` 可以重试；校验错误的 `.part` 应移走后重新下载。
+
+没有外网的服务器可以在能联网的机器执行下载命令，再使用 `scp`/已有文件传输方式把**同一文件**放到服务器 YAML 指定的位置。训练和推理传给 `clip.load` 的是实际本地文件路径，不是会触发联网的模型名称。CADP 正式配置校验的是 224 分辨率版本 ViT-L/14，不接受把 L/14@336 当成同一个配置。
+
+## 5. 下载真实数据，而不是运行 toy 数据冒充实验
+
+本交付默认研究协议使用 GenImage。附件规定了方法与超参数，没有给出完整实验数据集清单，因此这里明确增加了 GenImage 主协议和通用 CSV 数据接口，不声称自动复现所有检测论文的数据集/成绩。
+
+GenImage 官方说明及目录来自：<https://github.com/GenImage-Dataset/GenImage/blob/main/Readme.md>。真实图像涉及 ImageNet 来源，使用前应自行确认相应数据条款和访问资格。
+
+```bash
+python -m cadp.cli download-data --config configs/cadp/server.yaml  # 只打印官方下载来源和本地目标，不开始大规模下载。
+python -m cadp.cli download-data --config configs/cadp/server.yaml --execute  # 从配置的官方 Drive 文件夹下载归档，可能占用大量磁盘。
+find /data/aigcdetect/datasets/downloads/GenImage -maxdepth 3 -type f | head -30  # 检查实际下载了什么文件。
+```
+
+Google Drive 的额度、权限、大目录限制和发布者文件变更是外部条件；脚本不会绕过限制，也不会把没有文件的下载宣称成功。默认是百万级数据集的下载入口，不是“小型快速数据包”。交付时没有下载整个 GenImage。下载受限时可按官方 README 的其他渠道获得归档，再放到本地；不是让训练代码去读网盘 URL。
+
+普通 ZIP/TAR 可使用安全解包命令，**将输入替换为你实际下载到的完整归档文件**：
+
+```bash
+python -m cadp.cli extract --input /实际下载路径/dataset.zip --destination /data/aigcdetect/datasets/GenImage  # 解包，不允许目录穿越、符号链接或覆盖已有文件。
+```
+
+多卷压缩文件如 `.z01/.zip` 或 `.7z.001` 不假定普通 ZIP 读取器能处理。先收齐所有分卷，按发布者说明使用兼容解压程序；不要把一个分卷当成完整数据集。解包后检查目录，再编辑 `configs/cadp/genimage.yaml` 的 `domains`。发布版本的目录名可能与示例不同，**修改映射即可，不必移动整个数据集**。
+
+期望的逻辑结构是：
+
+```text
+/data/aigcdetect/datasets/GenImage/
+  Stable Diffusion V1.4/
+    train/nature/...图片...
+    train/ai/...图片...
+    val/nature/...图片...
+    val/ai/...图片...
+  Stable Diffusion V1.5/...
   Midjourney/...
-  stable_diffusion_v_1_4/...
-  stable_diffusion_v_1_5/...
-  glide/...   wukong/...   VQDM/...
+  ADM/...
+  GLIDE/...
+  Wukong/...
+  VQDM/...
+  BigGAN/...
 ```
 
-数据加载器会递归读取图片，支持 `0_real/1_fake`、`real/fake`、`nature/ai` 标签目录；坏图片会明确报错，不会伪造一张全零图片继续训练。
+`nature/real/0_real` 都映射为 0；`ai/fake/1_fake` 都映射为 1。目录标签不明确时程序报错，不猜测标签。自定义 HTTP 资产必须在下载 YAML 填入发布方提供的 SHA256；Hugging Face 下载器支持固定 revision 的 snapshot，但不同数据集的 Parquet/image schema 不能凭空通用转换，必须先转换为下一节的本地图像和 CSV。
 
-## 7. 数据完整性与运行检查
+### 5.1 已保存到本地的 Hugging Face Arrow 数据
+
+`export-arrow` 支持 Hugging Face `Dataset.save_to_disk` 的本地目录，要求列名为 `image`、`label`，标签为二值 0/1。支持直接数据集目录，或 `data/test/生成器名` / `test/生成器名` 等分层目录。它不是通用 Parquet 转换器；其他 schema 需要明确适配，程序不会猜测标签。
 
 ```bash
-# 比对原版源码/资源 SHA256；确认没有改动上游实现。
-python tools/verify_upstream.py
-
-# 快速检查目录和解析后的路径交集；同一图片文件不可同时出现在 train/val。
-python tools/audit_data.py --config "$CONFIG" --output /data/rita/aigcdetect/outputs/data_audit_paths.json
-
-# 全量读图和内容哈希检查：可发现不同路径下相同字节的训练/测试图片。
-# 这一步有完整磁盘扫描成本，不只是检查若干样本。
-python tools/audit_data.py --config "$CONFIG" --hash --decode --output /data/rita/aigcdetect/outputs/data_audit_sha256.json
-
-# 用正式本地权重、服务器指定 GPU 检查一次真实前向与 FP32 反向。
-python tools/check_env.py --config "$CONFIG" --stage all --forward --backward
-
-# 独立运行本项目的CPU回归测试；测试自己生成小模型和小数据，不使用你的训练集。
-python tools/validate_delivery.py --output /data/rita/aigcdetect/outputs/code_validation
+python -m cadp.cli export-arrow --snapshot /data/aigcdetect/datasets/downloads/my_snapshot --output /data/aigcdetect/datasets/arrow_images --split test --fake-label 1  # 原标签 1 是 fake；保持原图编码字节，不重新压缩 JPEG。
+python -m cadp.cli scan --root /data/aigcdetect/datasets/arrow_images --source local_arrow --split test --output /data/aigcdetect/manifests/arrow_test.csv  # 转成通用图像 CSV 清单，再登记到 YAML 的 data.tests。
 ```
 
-内容审计失败时应先定位、记录并修复数据来源/划分问题，不要忽略报错直接汇报无泄漏结果。不同测试域可能共享真实图片，工具不将 test-vs-test 共享自动判为 train/test 泄漏；你的论文仍应注明测试集重叠及宏平均的含义。哈希检查只能识别字节完全相同的副本，不能识别所有重新压缩或裁剪后的近重复。
+发布者用 0 表示 fake 时，必须明确改为 `--fake-label 0`。导出时逐图检查格式、原始字节 SHA256 和已有文件冲突；已导出且内容一致的文件可复用。下载器 `huggingface` 模式需填写发布方真实 `repo_id`、固定 `revision` 及所需文件范围；示例中不虚构一个特定数据集的 schema 或授权。
 
-只训练时 `check_env --stage train` 不要求下载测试集；只推理时 `--stage infer` 不要求任何数据集目录。正式 eval 默认仅要求测试域，不再为了测试去读取训练集。
+## 6. 构建训练、验证、测试清单
 
-## 8. 先做服务器端小规模启动，再运行全量实验
+### 6.1 默认 GenImage：SD1.4 训练，八域测试
 
-下列启动命令是真实模型/真实本地数据的1轮训练，不是合成样本测试。但它只是启动检查；不能把结果当成100轮全量结果。单独输出目录，避免污染正式实验。
+先编辑 `configs/cadp/genimage.yaml` 的根目录和八个域的实际文件夹名，再执行：
 
 ```bash
-# 使用小 micro-batch 跑一轮；accumulate_steps=12使满组有效 batch=4×12=48。
-python tools/train.py --config "$CONFIG" \
-  --set training.epochs=1 \
-  --set training.batch_size=4 \
-  --set training.accumulate_steps=12 \
-  --set paths.output_dir=/data/rita/aigcdetect/outputs/server_startup
+python -m cadp.cli prepare-protocol --config configs/cadp/server.yaml --protocol configs/cadp/genimage.yaml --source sd14  # 扫描真实图像、计算哈希、从源 train 划出验证集、登记八个测试域。
+python -m cadp.cli audit --config /data/aigcdetect/manifests/sd14.yaml --rehash  # 重新读取图片字节，检查标签、损坏文件及 train/val/test 泄漏。
 ```
 
-该命令仍遍历完整训练集一轮；不是只取一个 batch。服务器前后向能否工作可先用上一节 `check_env` 判断。1轮启动结果不能直接作为“同一100轮计划”的精确续训起点，因为其学习率调度周期不同。完整实验从新输出目录开始，默认命令如下：
+输出包含 `source_sd14/train.csv`、`source_sd14/val.csv`、`tests/<域名>.csv`、`sd14.yaml` 和 `protocol.json`。后续正式训练使用这个生成的 **`sd14.yaml`**，不是仍然没有测试集列表的初始 server.yaml。
+
+这里做了一个重要区分：**GenImage 官方目录名 `val` 在本协议中用作最终测试集**。模型选择验证集从 SD1.4 的官方 `train` 中按组划出 10%；split seed 固定为 42，并不随训练 seed 42/43/44 改变。不要用最终测试集既调参又汇报成绩。
+
+### 6.2 自己的数据或额外 OOD 测试集
+
+CSV 至少包括 `path,label`；本项目生成和严格审核使用完整字段：
+
+```csv
+path,label,source,split,group,sha256
+/data/.../real_001.jpg,0,cameraA,train,content_group_001,实际64位哈希
+/data/.../fake_001.png,1,generatorA,train,content_group_002,实际64位哈希
+```
+
+不要照抄上面占位哈希。用扫描命令自动生成：
 
 ```bash
-# 全量正式训练：读取 YAML 中100轮、batch48及所有方法设置。
-bash scripts/run_train_genimage.sh
-
-# 用验证集选出的 best.pt 完整评测八个生成器。
-# 将下面路径替换成你 YAML 中 paths.output_dir 对应的 best.pt。
-bash scripts/run_eval_genimage.sh /data/rita/aigcdetect/outputs/genimage_full/best.pt
-
-# 同一个已训练模型做 clean + JPEG95/75/50 + GaussianBlur1/2，默认共6个条件×8域。
-bash scripts/run_robustness.sh /data/rita/aigcdetect/outputs/genimage_full/best.pt
+python -m cadp.cli scan --root /你的训练图片根目录 --source my_source --split train --output /data/aigcdetect/manifests/all_train.csv  # 从明确的 real/fake 子目录识别标签并计算内容哈希。
+python -m cadp.cli split --config configs/cadp/server.yaml --input /data/aigcdetect/manifests/all_train.csv --train-output /data/aigcdetect/manifests/train.csv --val-output /data/aigcdetect/manifests/val.csv --fraction 0.1  # 按组划分训练与验证。
+python -m cadp.cli scan --root /你的独立测试图片根目录 --source unseen_generator --split test --output /data/aigcdetect/manifests/unseen.csv  # 登记完全独立的测试集。
 ```
 
-正式训练可按显存将 `training.batch_size=4`、`training.accumulate_steps=12` 写入 YAML，保持满组有效 batch48；这与单次batch48不保证逐位等价，因为共享噪声、随机增强及随机路由的分组改变了。显存进一步不足时减小 `model.prompt.image_chunk_size` 或 `text_chunk_size`；`sample_chunk_size=1` 和激活重计算默认开启，**不会把测试10个样本偷换成1个样本**。训练时仍计算4个长度分支以获得 straight-through 路由梯度，不能将“前向选择一个长度”误当成只需计算一条训练分支。
-
-训练入口不偷偷使用测试域选最佳权重。默认只根据独立验证集 AP 保存 `best.pt`；`last.pt` 保存完整续训状态。训练100轮是配置的计划，不保证每个硬件都能用默认batch48成功，GPU启动检查必须实际执行。
-
-## 9. 断点续训、日志及 checkpoint
-
-```bash
-# 在原输出目录、相同模型和训练预算下，从最后完成的 epoch 恢复。
-python tools/train.py --config "$CONFIG" \
-  --set training.resume=/data/rita/aigcdetect/outputs/genimage_full/last.pt
-
-# 查看最近的训练记录；每行JSON对应一个完成的epoch。
-tail -n 5 /data/rita/aigcdetect/outputs/genimage_full/history.jsonl
-
-# 实时观察显存/进程信息，不参与训练逻辑。
-nvidia-smi
-```
-
-不要修改 epochs、学习率、weight_decay、batch_size、accumulate_steps、model 或 ablation 后还声称“精确续训”；程序对关键训练参数做一致性检查。恢复只支持 epoch 边界，进程在 epoch 中间被打断时，重跑该未完成轮。学习率调度器、优化器、AMP scaler、Python/NumPy/Torch随机状态均保存；CPU回归测试验证了同一配置下“连续2轮”与“1轮后重启续训到2轮”的全部模型状态逐项相等。跨 GPU型号、驱动、torch版本或非确定性CUDA算子不承诺位级一致。
-
-`best.pt/last.pt` 为新模块+LoRA的 adapter 文件，不重复保存整个冻结 CLIP。必须同时保留原 CLIP 文件和其来源。程序使用受限 `weights_only=True` 加载本项目检查点，不接受任意陌生 pickle 对象。旧版缺少 scheduler/RNG 的检查点不能获得相同续训保证。续训请在原输出目录进行，避免把旧 best.pt 与新目录分离。
-
-```text
-paths.output_dir/
-  resolved_config.json           # 实际生效的训练配置
-  history.jsonl                 # 逐轮损失、验证指标、下一轮LR和best值
-  last.pt                       # 最近完成轮的参数及优化状态
-  best.pt                       # 由验证指标选出的权重
-  eval/
-    ADM_metrics.json            # 指标取值0~1，不是0~100百分数
-    ADM_predictions.csv         # 路径、标签、fake概率、private长度
-    summary.json                # 各域结果 + 域间等权macro
-    ADM__jpeg75_metrics.json    # 鲁棒性条件结果
-    robustness_summary.json
-```
-
-若需要断开SSH继续训练，请使用服务器已提供的终端会话管理器，例如 tmux；这是你在服务器执行的进程，不是聊天助手在后台替你运行。保存命令输出时可使用 `bash scripts/run_train_genimage.sh 2>&1 | tee train_console.log`；shell应开启 `set -o pipefail`，避免只看到 tee 的成功状态而遗漏训练失败。
-
-## 10. 全量消融、三个种子和结果汇总
-
-消融包括 full、去Cross-Attention、固定private长度7、去概率提示、去DCT损失、固定类别锚点、去LoRA，共7个配置。去概率提示会同时关闭其KL/重构项；其余损失设置不暗改。每个配置独立训练并自动从自身checkpoint恢复正确模型结构做评测，避免拿 full 配置误测消融权重。
-
-```bash
-# 仅打印完整计划，不写结果、不训练：7配置×3种子=21个训练任务。
-bash scripts/run_ablations.sh --seeds 0,1,2 --dry-run
-
-# 真正执行21次完整训练及八域clean评测；默认每次100轮。
-bash scripts/run_ablations.sh --seeds 0,1,2
-
-# 完整方法单独做3个种子；独立输出目录避免覆盖前面单种子实验。
-python tools/run_suite.py --config "$CONFIG" --suite full --seeds 0,1,2 \
-  --output /data/rita/aigcdetect/outputs/full_three_seeds
-
-# 最完整组合：21次训练 + 每次八域clean与六条件鲁棒性评测。
-# 不要在已有同名结果的情况下不带 --resume 重复启动。
-bash scripts/run_all_experiments.sh --seeds 0,1,2
-
-# 中断后恢复同一个完整实验计划；已训练完的任务不会再训练新轮。
-bash scripts/run_all_experiments.sh --seeds 0,1,2 --resume
-
-# 只重跑已有消融checkpoint的评测，不再训练。
-bash scripts/run_ablations.sh --seeds 0,1,2 --stage eval
-
-# 对实际存在的各seed结果汇总均值和样本标准差。
-python tools/collect_results.py /data/rita/aigcdetect/outputs/genimage_suite
-```
-
-每个运行保存 `run.yaml`，目录形如 `full_seed0/`、`no_cross_attention_seed0/`。汇总为 `aggregate.json`：先取各测试域的等权宏平均，再跨完成的种子求均值/样本标准差；只完成一个种子时 std=null。缺失结果不会填0，也不会冒充已完成3个种子。`collect_results` 仅汇总 clean summary；鲁棒性结果保留在每个运行的 `robustness_summary.json` 中，不伪造跨种子的鲁棒性统计。
-
-上述 `all` 指本指南定义的“7配置×指定种子×配置测试域×鲁棒性条件”，不含尚未实现的多机训练、所有公开检测方法或任意8×8训练源矩阵。用户方案没有提供这些额外实验的确定协议。
-
-## 11. 单图推理、指定测试域、调整采样数
-
-```bash
-# 用正式训练的 best.pt 对本地一张图片判断，输出 real/fake概率及动态private长度。
-python tools/infer.py /data/rita/example.jpg --config "$CONFIG" \
-  --checkpoint /data/rita/aigcdetect/outputs/genimage_full/best.pt
-
-# 只测试ADM和BigGAN。其余本地域无需存在；训练/验证目录也无需存在。
-python tools/eval.py --config "$CONFIG" \
-  --checkpoint /data/rita/aigcdetect/outputs/genimage_full/best.pt \
-  --set 'data.test_sets=[ADM,BigGAN]' \
-  --set paths.output_dir=/data/rita/aigcdetect/outputs/two_domains
-
-# 采样数消融示例：另存结果，明确它不是默认S_test=10的主结果。
-python tools/eval.py --config "$CONFIG" \
-  --checkpoint /data/rita/aigcdetect/outputs/genimage_full/best.pt \
-  --set model.prompt.test_samples=1 \
-  --set paths.output_dir=/data/rita/aigcdetect/outputs/test_samples_1
-```
-
-默认噪声由 `model.prompt.eval_seed=0` 产生，在构造模型时固定并在每张图像复用基础噪声；private分布仍由各图像条件化，因此并未变成相同提示。先对每个Real/Fake pair做softmax，再平均K×S个概率。阈值0.5；单类别测试子集的AP/AUC为null而不是0。结果不是经过概率校准的真实性证明。
-
-## 12. Ojha / UniversalFakeDetect 实验
-
-`configs/ojha.yaml` 为常用的8个扩散域，`configs/ojha_19.yaml` 为11个GAN域+8个扩散域。默认训练/验证只选 ProGAN 的 `car,cat,chair,horse` 四类；要求目录中有这些类名。此处四类是本项目显式选择的实验设置，原官方数据包包含更多类别。公开扩散测试包与原论文报告的抽样规模不完全一致，报告结果时必须标明实际包版本与各域数量。
-
-官方下载来源可核对：<https://github.com/WisconsinAIVision/UniversalFakeDetect>、<https://github.com/PeterWang512/CNNDetection>。Google Drive 配额、权限和链接有效性不由本仓库控制；脚本遇到失败会报错，不会生成假的下载成功标记。`downloads.ojha_archives` 中各ID可更改为官方后续发布的替代地址ID。
-
-```bash
-# 生成一份已合并extends的个人配置，方便单独改本地路径。
-python -c "from aigcdetect.config import load_config; import yaml; from pathlib import Path; Path.home().joinpath('aigcdetect_configs/ojha.yaml').write_text(yaml.safe_dump(load_config('configs/ojha.yaml'),sort_keys=False))"
-export CONFIG="$HOME/aigcdetect_configs/ojha.yaml"
-nano "$CONFIG"
-
-# 下载计划：不进行网络传输。
-bash scripts/download_ojha_official.sh --subset all --dry-run
-
-# 实际下载训练、验证、GAN测试和扩散测试压缩包到 paths.download_dir/ojha。
-bash scripts/download_ojha_official.sh --subset all
-```
-
-压缩包不自动解压，以免不同发布版本的顶层目录互相覆盖。假设 `paths.download_dir=/data/rita/aigcdetect/datasets/downloads`，先安装或使用服务器已有的7z，然后执行：
-
-```bash
-# Debian/Ubuntu且有sudo权限时才执行；其他系统请按管理员提供的方式安装7z。
-sudo apt-get install p7zip-full
-
-# 先查看包内结构，再分别解压。文件后缀不决定真实压缩格式，7z按内容识别。
-7z l /data/rita/aigcdetect/datasets/downloads/ojha/train.zip
-7z x /data/rita/aigcdetect/datasets/downloads/ojha/train.zip -o/data/rita/aigcdetect/datasets/ojha_unpack/train
-7z x /data/rita/aigcdetect/datasets/downloads/ojha/val.zip -o/data/rita/aigcdetect/datasets/ojha_unpack/val
-7z x /data/rita/aigcdetect/datasets/downloads/ojha/cnn_test.zip -o/data/rita/aigcdetect/datasets/ojha_unpack/cnn_test
-7z x /data/rita/aigcdetect/datasets/downloads/ojha/diffusion.zip -o/data/rita/aigcdetect/datasets/ojha_unpack/diffusion
-
-# 列出标签目录，找到压缩包真实的顶层层级，不猜测嵌套路径。
-find /data/rita/aigcdetect/datasets/ojha_unpack -type d -name 0_real | head -n 30
-```
-
-将 `data.train_root` 和 `val_root` 指向实际包含 car/cat/chair/horse 的父目录，允许前面还有 progan 层。测试域若分布在多个压缩包中，可令 `data.test_root` 指向共同父目录，并在 **YAML内**使用“域名→相对真实路径”的映射：
+然后在自己的配置中写：
 
 ```yaml
 data:
-  test_root: /data/rita/aigcdetect/datasets/ojha_unpack
-  test_sets:
-    dalle: diffusion/实际顶层/dalle
-    glide_100_10: diffusion/实际顶层/glide_100_10
-    # 其余域按 find 的真实结果补齐；不要保留“实际顶层”字样。
-    progan: cnn_test/实际顶层/progan
+  train: train.csv
+  val: val.csv
+  tests:
+    - name: unseen_generator
+      manifest: unseen.csv
 ```
 
-这只是映射写法示例，不是可以直接执行的完整19域配置。实际目录一致时可直接使用 `configs/ojha_19.yaml` 中的19个名称列表；否则把该列表逐域改为正确映射。不能把缺失域当成0分或称为19域评测。
+相对 manifest 文件名相对于 `paths.manifest_dir`；CSV 内的相对图片路径相对于 `paths.data_root`，不是 CSV 所在目录。可以在扫描时使用 `--relative-to /共同的数据根目录` 创建可迁移的相对路径清单。
+
+扫描默认用文件内容 SHA256 作为 group，能够阻止同一文件内容跨拆分泄漏，**不能识别所有近重复图、语义配对或同一视频相邻帧**。这类数据必须在划分前设置共同 `group`，例如“同一原始内容的所有增强版本/视频帧/生成配对”。每个分层至少需要两个独立 group。相同字节被标为不同真假标签时直接拒绝。
+
+独立 `train` 与 `preflight` 只读取 train/val，不要求先安装测试集；`evaluate` 和完整实验套件会检查全部训练/验证/测试清单，防止泄漏。
+
+## 7. 在真正的 GPU 上验收一次
 
 ```bash
-# 对准备好的本地路径做完整检查。
-python tools/check_env.py --config "$CONFIG" --stage all --forward
-python tools/audit_data.py --config "$CONFIG" --hash --decode
-
-# 按当前CONFIG训练、评测8域或19域；取决于该YAML实际的test_sets。
-bash scripts/run_train_ojha.sh
-bash scripts/run_eval_ojha.sh /data/rita/aigcdetect/outputs/ojha_full/best.pt
-
-# 同一实验协议下的消融，输出路径必须与GenImage分开。
-bash scripts/run_ablations.sh --seeds 0,1,2 --output /data/rita/aigcdetect/outputs/ojha_suite
+export CUDA_VISIBLE_DEVICES=0  # 本进程只看物理 GPU 0；程序中的 cuda:0 就是这张卡。
+python -m cadp.cli doctor --config /data/aigcdetect/manifests/sd14.yaml  # 确认当前激活环境及本地权重路径。
+python -m cadp.cli preflight --config /data/aigcdetect/manifests/sd14.yaml  # 使用真实权重和真实训练图片完成前向、六项损失、反向及有限梯度检查。
 ```
 
-## 13. 原版 PPM-CLIP 的保留入口与局限
+结果写入该配置 `paths.output_dir/preflight.json`，包含 `device`、`tiny_random_backbone`、CLIP 哈希、各项损失和梯度范数。正式验收必须看到 `tiny_random_backbone: false`、实际 CUDA 设备及通过状态。此命令不修改模型权重，不代表 100 epoch 已跑完，也不证明准确率达到目标。
 
-`tools/run_baseline.py` 仅在当前进程里把原版数据根目录和 `clip.load` 指向 YAML 的本地资源，输出放在 `paths.output_dir/original_baseline/`。没有编辑上游文件。它还去掉不同torch版本中废弃的 scheduler `verbose` 展示参数；其余原版训练逻辑保留。
+从 CPU 小网络测试不能推出任何 GPU 峰值显存保证。OOM 时按第 3 节降低 microbatch / text chunk，检查其他进程占用显存，然后重新 preflight。默认 DCT loss 对正负 patch 距离做“求和”而不是 patch 数量均值，因此数值可能远大于分类 loss；程序按附件保留该定义，日志会分别记录，不能擅自改权重后仍当成原设定。
 
-**重要：固定提交中的原版 `main.py` 在 val_acc≥0.90 后，用测试集均值驱动 early stopping；这不是无测试泄漏的模型选择协议。原版还使用其自身数据增强、随机采样、梯度累积和保存规则。** 本项目不掩盖这些差异，也不将原版输出当成公平对照结果。要做论文级公平比较，需要在单独的受控复现分支统一验证集选模等规则并披露改动；这不属于“原代码保持不变”的启动入口。原版完整GPU训练未在本地验证。
+## 8. 正式完整训练与断点恢复
+
+### 8.1 单个完整训练任务
 
 ```bash
-# 先恢复GenImage个人配置；检查原版启动参数和限制，不运行训练。
-export CONFIG="$HOME/aigcdetect_configs/genimage.yaml"
-bash scripts/run_baseline_ppmclip.sh --action train --dataset genimage --dry-run
-
-# 启动固定提交的原始训练逻辑；注意上面明确说明的协议局限。
-bash scripts/run_baseline_ppmclip.sh --action train --dataset genimage
-
-# 使用原版自身保存的state_dict评测，不能传入新方法的adapter best.pt。
-bash scripts/run_baseline_ppmclip.sh --action eval --dataset genimage \
-  --checkpoint /data/rita/aigcdetect/outputs/genimage_full/original_baseline/checkpoints/原版实际文件名.pt
+python -m cadp.cli train --config /data/aigcdetect/manifests/sd14.yaml  # 使用全部训练清单，完整训练配置中的 100 个 epoch。
 ```
 
-原版要求 num_workers≥1。Ojha原版不会按 `train_classes` 过滤，因此需要先准备只含四类的独立目录，再把 `data.train_classes=[]`；启动器会阻止不一致配置，而不是偷偷使用20类。新方法的训练器不受这些原版限制。
+没有 `--stop-after-epoch`，没有 `model.tiny=true`，没有图片数上限。AdamW 使用新模块 lr=1e-4、视觉 LoRA lr=1e-5、weight decay=1e-4；默认启用可关闭的 cosine 调度和梯度裁剪，见方法映射中的工程约定。
 
-## 14. 常见错误与处理
+每轮完整结束后原子写入 `last.pt`；只有源验证集 AUROC 严格提升时更新 `best.pt`。测试集从不参与选择。训练文件如下：
 
-| 情况 | 应对方式 |
+```text
+runs/sd14_seed42/
+  config.yaml
+  data_audit.json
+  parameters.json
+  history.jsonl
+  last.pt
+  best.pt
+  best_validation.predictions.csv
+  best_validation.metrics.json
+```
+
+`history.jsonl` 每行是一轮的全部损失、验证指标、耗时和学习率。CADP checkpoint 只保存新增模块、LoRA 和必需的缓冲区，不重复存整套冻结 CLIP；另外保存优化器、调度器、scaler、训练轮数、模型配置、基础模型哈希和清单哈希。
+
+```bash
+tail -n 2 /data/aigcdetect/runs/sd14_seed42/history.jsonl  # 查看最近两轮实际记录。
+python -m cadp.cli train --config /data/aigcdetect/manifests/sd14.yaml --set train.resume=/data/aigcdetect/runs/sd14_seed42/last.pt  # 从最后一个完整 epoch 恢复，不重新开始。
+```
+
+恢复必须指向相同 run 目录，并保持训练协议一致。移动机器时移动整个 run 目录及数据/CLIP，再改本地路径；不要只复制 last.pt 到一个空输出目录却丢失 best.pt。中途断电最多重跑尚未写入 checkpoint 的那一轮，不声称支持 batch 中途逐步恢复。完成 100 轮后再次恢复不会凭空多训练 100 轮。
+
+已有 checkpoint 的目录不允许无 `resume` 重开实验；改随机种子、消融配置或训练长度时使用新目录。**本版本每个实验用一个设备，不提供 DDP/torchrun**；多 GPU 可运行独立 seed 或不同训练源任务，并为每个任务分配不同输出目录。
+
+### 8.2 三随机种子主实验
+
+```bash
+python -m cadp.cli suite --config /data/aigcdetect/manifests/sd14.yaml --group main --output /data/aigcdetect/experiments/sd14  # 只生成完整实验计划与每个任务配置，不训练。
+bash scripts/cadp/full.sh /data/aigcdetect/manifests/sd14.yaml /data/aigcdetect/experiments/sd14 main  # 审核、GPU preflight、三个 100-epoch 训练及各自八域测试。
+```
+
+三个训练 seed 是 42、43、44，每个训练都使用同一训练/验证划分。每个 run 自己的 `best.pt` 用于自己的全部测试。已经完成且配置、数据和依赖 checkpoint 未变的任务可跳过；失败任务写独立日志并停止后续任务，不吞掉异常。
+
+## 9. 使用训练结果评测与推理
+
+以下使用单 run 的示例路径；批量 suite 的 checkpoint 路径是 `experiments/sd14/runs/full/seed42/best.pt`，配置也在对应 run 下。必须配对使用，不能把固定长度消融的 checkpoint 交给完整模型配置。
+
+```bash
+python -m cadp.cli evaluate --config /data/aigcdetect/runs/sd14_seed42/config.yaml --checkpoint /data/aigcdetect/runs/sd14_seed42/best.pt --output /data/aigcdetect/runs/sd14_seed42/evaluation  # 对 YAML 中所有独立测试域评测，默认 S=10、阈值 0.5。
+python -m cadp.cli predict --config /data/aigcdetect/runs/sd14_seed42/config.yaml --checkpoint /data/aigcdetect/runs/sd14_seed42/best.pt --input /你的图片.jpg --output /data/aigcdetect/prediction.csv  # 单图推理，不要求真假标签。
+python -m cadp.cli predict --config /data/aigcdetect/runs/sd14_seed42/config.yaml --checkpoint /data/aigcdetect/runs/sd14_seed42/best.pt --input /你的图片文件夹 --output /data/aigcdetect/folder_predictions.csv  # 递归逐图推理支持的图像格式。
+```
+
+每个域输出逐图 CSV 和指标 JSON；包含 accuracy、balanced accuracy、真实/生成图准确率、AUROC、AP、F1、TPR@FPR、ECE、Brier、NLL、混淆矩阵、动态长度直方图。指标数值为 0–1，不是已经乘 100 的百分数。只有一个类别时 AUROC/AP 写 `null`，不是伪造 0 或 1。
+
+最终 `summary.json` 给出八域分别的结果和域间宏平均，避免把在多个域重复出现的真实图片全部混在一起而误导微平均。图片级 bootstrap 可以设置 `--set eval.bootstrap=1000`；它不替代训练随机种子标准差，也不是组级置信区间。
+
+### 阈值校准（单独报告，不替换默认 0.5 主结果）
+
+```bash
+python -m cadp.cli calibrate --config /data/aigcdetect/runs/sd14_seed42/config.yaml --checkpoint /data/aigcdetect/runs/sd14_seed42/best.pt --output /data/aigcdetect/threshold.json  # 只读取配置中的验证集，用 Youden J 选择阈值。
+THRESHOLD=$(python -c "import json; print(json.load(open('/data/aigcdetect/threshold.json'))['threshold'])")  # 从实际校准文件读取数字。
+python -m cadp.cli evaluate --config /data/aigcdetect/runs/sd14_seed42/config.yaml --checkpoint /data/aigcdetect/runs/sd14_seed42/best.pt --set "eval.threshold=$THRESHOLD" --output /data/aigcdetect/runs/sd14_seed42/eval_calibrated  # 对测试集应用事先选择好的阈值，另存结果。
+```
+
+`threshold.json` 记录 checkpoint 和验证清单哈希。使用者必须确保把它用于同一个 checkpoint、相同采样数和退化设置，不能对着测试集改阈值追求更高分。
+
+### 注意力与效率
+
+```bash
+python -m cadp.cli predict --config /data/aigcdetect/runs/sd14_seed42/config.yaml --checkpoint /data/aigcdetect/runs/sd14_seed42/best.pt --input /你的图片.jpg --output /data/aigcdetect/explain/prediction.csv --attention  # 额外导出每次概率采样、repository、类别、head、context、patch 的注意力 NPZ。
+python -m cadp.cli benchmark --config /data/aigcdetect/runs/sd14_seed42/config.yaml --checkpoint /data/aigcdetect/runs/sd14_seed42/best.pt --output /data/aigcdetect/benchmark.json --warmup 3 --repeats 20  # 同步 CUDA 后测量完整 S=10 前向吞吐、P50/P95 批延迟与峰值 allocated 显存。
+```
+
+注意力数组形状为 `[B_group,S,K,2,heads,M,Npatch]`，ViT-L/14 的 `Npatch=256`。这是相关性可视化数据，不是因果证据。本入口不自动生成可能误导的“伪造区域真值”。效率测量包含视觉编码、动态长度、全部 MC 文本推理及 Cross-Attention，不包含磁盘读取、预处理、CPU→GPU 拷贝和权重加载；报告中明确区分。
+
+## 10. 完整消融、鲁棒性、MC 与跨源矩阵
+
+```bash
+python -m cadp.cli suite --config /data/aigcdetect/manifests/sd14.yaml --group all --output /data/aigcdetect/experiments/sd14  # 查看全部任务数量及配置，再决定占用哪些计算资源。
+bash scripts/cadp/full.sh /data/aigcdetect/manifests/sd14.yaml /data/aigcdetect/experiments/sd14 all  # 完整执行：45 个训练任务、81 个评测/效率任务，共 126 个任务。
+```
+
+这里的 45 个训练任务是 **完整方法 + 14 个消融，共 15 个方法变体 × 3 个 seed**。不是 45 个 smoke。默认每个训练 100 epochs，真实运行量可能很大，计划文件不会把它隐藏起来。
+
+主实验完成后，也可按组单独补跑，`--resume` 会检查已完成任务：
+
+```bash
+python -m cadp.cli suite --config /data/aigcdetect/manifests/sd14.yaml --group ablations --output /data/aigcdetect/experiments/sd14 --execute --resume  # 逐个重新训练消融，不把推理开关当成训练消融。
+python -m cadp.cli suite --config /data/aigcdetect/manifests/sd14.yaml --group robustness --output /data/aigcdetect/experiments/sd14 --execute --resume  # 完整方法在 JPEG、模糊、缩放、噪声下测试，不重新训练。
+python -m cadp.cli suite --config /data/aigcdetect/manifests/sd14.yaml --group mc --output /data/aigcdetect/experiments/sd14 --execute --resume  # 同一 checkpoint 使用 1/5/10/20 次样本，检验性能与采样成本。
+python -m cadp.cli suite --config /data/aigcdetect/manifests/sd14.yaml --group efficiency --output /data/aigcdetect/experiments/sd14 --execute --resume  # 每个 seed 测完整推理效率。
+python -m cadp.cli aggregate --root /data/aigcdetect/experiments/sd14 --output /data/aigcdetect/experiments/sd14/aggregate  # 汇总实际完成的结果；没有结果时明确报错。
+```
+
+`aggregate/benchmarks.csv` 保存实际完成的效率结果；只有 benchmark 时仅输出效率结果，不生成虚假准确率。`aggregate/per_seed.csv` 保存每个 seed；`mean_std.csv` 保存样本标准差 `ddof=1`。只有一个 seed 时标准差为 null，不当成 0。不同退化、阈值、MC 数量分别分组，不能混成同一主表。
+
+可选八训练源 × 八测试域矩阵，需要下载八个训练域，而不是只有 SD1.4 train：
+
+```bash
+python -m cadp.cli prepare-protocol --config configs/cadp/server.yaml --protocol configs/cadp/genimage.yaml --all-sources  # 分别构建八个训练源自己的 train/val，以及共享八域测试清单。
+nano configs/cadp/suite.yaml  # 将 cross_source_configs 填为上一条输出的八个真实 YAML 绝对路径。
+python -m cadp.cli suite --config /data/aigcdetect/manifests/sd14.yaml --group cross-source --output /data/aigcdetect/experiments/cross_source  # 预览 8 源 × 3 seed 的训练及其全部测试任务。
+bash scripts/cadp/full.sh /data/aigcdetect/manifests/sd14.yaml /data/aigcdetect/experiments/cross_source cross-source  # 实际执行完整跨源矩阵。
+```
+
+`all` **不自动包含**这项额外的八源矩阵，避免不知情启动更多大规模训练。矩阵结果中按训练源和测试域读取 `mean_std.csv` 即可整理 8×8 表。详情与限制见 `EXPERIMENTS_ZH.md`。
+
+## 11. 运行原 PPM-CLIP 对照模型
+
+原始 `main.py/test.py` 保留原有行为，包括其硬编码数据路径、旧依赖和训练协议，不作为新方法的正式入口。新增 `cadp/legacy.py` 直接使用原始 `PPM_clip`、原始 prompt/PFL/LoRA 架构，仅做进程内适配，不写原文件。
+
+```bash
+bash scripts/cadp/baseline.sh /data/aigcdetect/manifests/sd14.yaml /data/aigcdetect/experiments/baseline  # 原始 PPM 架构，三个 seed，使用同一 CSV 划分、完整训练和八域评测。
+```
+
+该对照称为 **matched-harness PPM baseline**：使用和新方法一致的数据划分与验证集选模、相同优化器组策略；FP32 运行原始 flow，保留原始随机挑一个 repository 的训练方式及 orthogonal loss。原版常量固定 K=2、shared=3、private=7、class=10、flows=10、rank=4、alpha=.5。不要称它“逐项复现原论文成绩”，原训练器还有基于测试成绩早停等不同设置。
+
+适配修复了原全局 flow 硬编码 `.cuda()`、LoRA 模式切换的权重合并副作用，并强制从本地加载 CLIP；原 PPM 推理按单图固定随机噪声，防止缓存跨图片/批次影响。基线 checkpoint 为完整原网络 state，体积明显大于新方法的增量 checkpoint；两个方法的 checkpoint 不能混用。原模型没有新增 Cross-Attention，因此不支持 `--attention`，也不伪造概率样本方差。
+
+## 12. 只检查程序的 CPU 测试方式
+
+```bash
+export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1            # 避免环境中不相关 pytest 插件联网/挂起或改写测试行为。
+python -m pytest -c pytest-cadp.ini -p no:cacheprovider -q  # 运行隔离的自动化测试，避免把上游 test.py 当 pytest 文件。
+python scripts/cadp/check_sources.py               # 解析全部原始/新增 Python 和 shell 脚本，且不改上游 pyc。
+bash scripts/cadp/cpu_smoke.sh /tmp/cadp_acceptance_new  # 在一个新目录生成随机 fixture，跑训练、恢复、评测和推理闭环。
+```
+
+`cpu_smoke.sh` 是开发验收，不是第 8–10 节的真实实验替代品。随机图片的真假标签只是接口测试标签，不具有数据集含义。目录必须全新，避免覆盖已有结果。
+
+## 13. 常见失败与正确处理
+
+| 报错/现象 | 检查与处理 |
 |---|---|
-| `Local CLIP checkpoint not found` | 下载正式权重或修改 `paths.clip_model`，不要把目录名当成文件路径。 |
-| `No module named clip` / 上游导入冲突 | `git submodule update --init --recursive`；使用独立Python进程，不先导入另一个同名clip包。 |
-| CUDA不可用 | 检查实际激活的解释器、torch构建、驱动、作业GPU分配；程序不会静默改用CPU训练。 |
-| CUDA OOM | 减小micro-batch并增加accumulate_steps；减小image/text chunk；不要擅自把主实验测试采样数改成1。 |
-| torchvision算子缺失 | torch/torchvision需按官方配对版本重建环境；不要混装CPU torchvision和CUDA torch。 |
-| Arrow导出为空 | 检查 `data/train或test/生成器/` 的真实结构和下载模式；validation别名不是独立split。 |
-| 导出源身份/残留文件冲突 | 为新revision设置新的导出目录；不要把旧JPEG重编码版本混在原字节版本里。 |
-| 数据泄漏审计失败 | 根据审计JSON定位重复来源，重新制定并记录划分；不能靠忽略错误宣称无泄漏。 |
-| `Existing run` | 使用原last.pt续训，或选择新的output_dir；不会静默覆盖已有实验。 |
-| adapter SHA256不匹配 | 找回训练时使用的骨干文件；不要删掉校验逻辑绕过。 |
-| 单域AUC=null | 该域只有一个标签类别；检查0_real/1_fake目录，不将null当作0。 |
-| Google Drive下载失败 | 配额/权限/链接可能变化，查官方源更新ID；手动获取后仍需检查压缩包与目录。 |
-| GitHub/服务器显示的日期不同 | Git提交和Actions通常显示UTC，服务器/浏览器可能用本地时区；记录提交SHA比口头日期可靠。 |
+| `No module named cadp` | 确认在仓库根目录、正确 conda 环境运行 `python -m cadp.cli`。 |
+| `Local CLIP checkpoint missing` | YAML 路径要指向真实 `.pt` 文件；先执行显式下载或传输。不要填文件夹或 Hugging Face repo 名。 |
+| `SHA256 mismatch` | 不继续训练；核对版本与下载完整性，明确移走错误文件后重下。 |
+| 数据目录找不到 | 修改 GenImage YAML 的域名→实际目录映射；确认是否多套了一层解压目录。 |
+| `Data leakage` | 调整真实数据拆分/分组，不删除审核来追求跑通；检查同一真实图片是否混入 train 与 test。 |
+| `Cannot decode/preprocess image` | 修复或明确清理损坏图像、重新生成清单；程序不会静默返回黑图。 |
+| CUDA OOM | microbatch 降至 1、累积相应增大、启用块 checkpoint、减 text_chunk/eval batch，关闭其他占卡任务。 |
+| bf16 不支持 | 根据 GPU 能力改成 fp16 或 off，然后重新 preflight；保持实验记录可追溯。 |
+| 非有限 loss/梯度 | 停止检查精度、学习率、数据与损失尺度；不能在日志里替换 NaN 后继续当正常结果。 |
+| `Checkpoint model configuration differs` | 使用该 run 保存的 config.yaml，只改本地路径及明确允许的评测/吞吐字段。 |
+| `Training source code changed` | 在新的实验目录重跑，避免复用旧代码训练出的结果却当成新代码实验。 |
+| pytest 显示进度完成后不退出 | 使用 `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`，排除系统预装的无关插件。 |
+| 某个指标为 null | 单类别 AUROC/AP、单 seed 标准差本来没有定义，需补齐相应数据/seed。 |
 
-## 15. 方法与文件对应
+训练前完整哈希和图像审核可能耗时，尤其在大型远程文件系统。首次审核通过并锁定数据后，可明确设 `data.hash_check: false`、`data.verify_images: false` 减少重复逐文件读取；仍要求清单哈希存在，但这样不再重新验证当前图片字节，必须理解这个取舍。
 
-| 设计部分 | 代码位置 |
-|---|---|
-| shared/private Gaussian、条件Planar Flow、KL/重构 | `aigcdetect/model/prompt_flow.py` |
-| ST Gumbel路由、Cross-Attention、门控融合 | `aigcdetect/model/components.py` |
-| 类别锚点、CLIP/LoRA、DCT、动态EOS、六损失、固定采样 | `aigcdetect/model/detector.py` |
-| 本地数据、增广、分阶段加载 | `aigcdetect/data/folder_dataset.py` |
-| 原字节Arrow导出、SHA分组划分、泄漏审计 | `aigcdetect/data/preparation.py` |
-| AdamW参数组、梯度累积、调度器、完整续训 | `aigcdetect/engine/train.py` |
-| 指标、逐图预测、域间macro | `aigcdetect/engine/metrics.py`、`evaluate.py` |
-| 命令入口、全量实验编排、下载、检查 | `aigcdetect/cli.py`、`tools/`、`scripts/` |
+## 14. 交付后你实际需要完成的事情
 
-每个 `tools/*.py` 主入口支持 `--help`（校验原版源码的简单工具除外），新增入口在导入时不会启动训练。新实验代码和用户数据始终与保留的上游源码分离。
+你需要在服务器准备合法获得的真实数据和本地 CLIP，确认 YAML 路径与驱动，完成真实 GPU preflight，再执行完整训练/实验矩阵。需要论文结果时，还要检查真实/生成图内容泄漏、数据来源偏差、跨生成器泛化和统计显著性，不能把软件测试通过写成方法有效性证据。
+
+本交付不会声称已在你的服务器跑过，不提供虚构准确率、显存占用或训练用时保证。所有正式结果由上述命令在你真实环境中产生，并保留配置、输入哈希、checkpoint 和逐图预测以供核验。

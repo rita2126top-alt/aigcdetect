@@ -1,0 +1,15 @@
+# Official publisher's Google Drive folder; large download, NOT a small demo dataset.
+# The command without --execute prints the destination and URL only.
+assets:
+  - name: GenImage official archives
+    type: gdrive_folder
+    url: https://drive.google.com/drive/folders/1jGt10bwTbhEZuGXLyvrCuxOI0cBqQ1FS?usp=sharing
+    destination: downloads/GenImage
+# Optional schema for an explicitly selected, verified publisher/mirror:
+# - name: my_hf_dataset
+#   type: huggingface
+#   repo_id: OWNER/DATASET
+#   revision: FULL_COMMIT_SHA
+#   destination: downloads/my_hf_dataset
+#   allow_patterns: ['data/*.parquet']
+# Parquet schemas are dataset-specific: convert them to the documented CSV/image format before use.

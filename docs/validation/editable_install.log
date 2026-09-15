@@ -1,0 +1,14 @@
+WARNING: The directory '/home/oai/.cache/pip' or its parent directory is not owned or is not writable by the current user. The cache has been disabled. Check the permissions and owner of that directory. If executing pip with sudo, you should use sudo's -H flag.
+Obtaining file:///mnt/data/aigcdetect
+  Checking if build backend supports build_editable: started
+  Checking if build backend supports build_editable: finished with status 'done'
+  Preparing editable metadata (pyproject.toml): started
+  Preparing editable metadata (pyproject.toml): finished with status 'done'
+Building wheels for collected packages: aigcdetect
+  Building editable for aigcdetect (pyproject.toml): started
+  Building editable for aigcdetect (pyproject.toml): finished with status 'done'
+  Created wheel for aigcdetect: filename=aigcdetect-0.2.0-0.editable-py3-none-any.whl size=2809 sha256=6d54c1f8dea36bf6f0d9c05c63b4f563c9b1d63d546b31992d22a44612ed99e9
+  Stored in directory: /tmp/pip-ephem-wheel-cache-2hf2chbn/wheels/dd/8f/bd/6acd6e8de9efb050e0ce4380c172b0c3b8c8a93adb6a5ff207
+Successfully built aigcdetect
+Installing collected packages: aigcdetect
+Successfully installed aigcdetect-0.2.0

@@ -1,0 +1,17 @@
+# Paths below are relative to paths.data_root; edit names to match YOUR extraction.
+root: GenImage
+source: sd14
+split_seed: 42
+validation_fraction: 0.1
+# Official GenImage val is the held-out TEST set, not the model-selection validation set.
+official_train_subdir: train
+official_test_subdir: val
+domains:
+  sd14: Stable Diffusion V1.4
+  sd15: Stable Diffusion V1.5
+  midjourney: Midjourney
+  adm: ADM
+  glide: GLIDE
+  wukong: Wukong
+  vqdm: VQDM
+  biggan: BigGAN

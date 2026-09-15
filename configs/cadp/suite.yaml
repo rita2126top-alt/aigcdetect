@@ -1,0 +1,21 @@
+seeds: [42, 43, 44]
+ablations:
+  - full
+  - no_cross_attention
+  - fixed_private_1
+  - fixed_private_3
+  - fixed_private_5
+  - fixed_private_7
+  - no_flow
+  - no_patch_loss
+  - fixed_class_anchors
+  - no_length_penalty
+  - one_repository
+  - no_vision_lora
+  - deterministic_latent
+  - no_reconstruction
+  - no_kl
+corruptions: ['jpeg:65', 'jpeg:30', 'blur:3', 'blur:5', 'resize:0.5', 'resize:0.285714', 'noise:0.01']
+mc_samples: [1, 5, 10, 20]
+# Fill with the actual files emitted by prepare-protocol --all-sources:
+cross_source_configs: []

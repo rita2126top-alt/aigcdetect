@@ -1,0 +1,10 @@
+{"plan": "/mnt/data/validation/suite_actual/plan_all.json", "jobs": 9, "training_jobs": 2}
+SKIP completed full_seed42_train
+SKIP completed full_seed42_clean
+SKIP completed no_cross_attention_seed42_train
+SKIP completed no_cross_attention_seed42_clean
+SKIP completed full_seed42_jpeg_65
+SKIP completed full_seed42_resize_0.5
+SKIP completed full_seed42_mc1
+SKIP completed full_seed42_mc10
+SKIP completed full_seed42_benchmark

@@ -1,0 +1,12 @@
+.......................................................                  [100%]
+=============================== warnings summary ===============================
+tests/cadp/test_correctness.py::test_legacy_baseline_train_eval_checkpoint
+  /mnt/data/aigcdetect/PPM_CLIP/networks/PFL.py:156: SyntaxWarning: invalid escape sequence '\s'
+    Log determinant is computed as log_det_j = N E_q_z0[\sum_k log |det dz_k/dz_k-1| ].
+
+tests/cadp/test_correctness.py::test_legacy_baseline_train_eval_checkpoint
+  /mnt/data/aigcdetect/PPM_CLIP/networks/PFL.py:240: SyntaxWarning: invalid escape sequence '\s'
+    Log determinant is computed as log_det_j = N E_q_z0[\sum_k log |det dz_k/dz_k-1| ].
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+55 passed, 2 warnings in 7.66s

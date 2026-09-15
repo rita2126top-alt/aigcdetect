@@ -1,59 +1,42 @@
-# AIGCDetect — Class-Anchored Dynamic Probabilistic PPM-CLIP
+# aigcdetect — PPM-CLIP 原版快照 + CADP-CLIP 新方法
 
-基于用户方法设计的AI生成图像检测项目：**两个类别锚点 + 动态概率提示 + context-to-patch Cross-Attention + 交互文本原型**，保留vision LoRA和DCT约束。
+本仓库保存未经修改的 PPM-CLIP 源码快照，并在独立 `cadp/` 目录实现用户提供的类别锚定、动态图像条件概率提示、文本 context → 视觉 patch cross-attention 方法。
 
-**完整中文教程：[docs/RUN_GUIDE_ZH.md](docs/RUN_GUIDE_ZH.md)**  
-**验证证据与限制：[docs/VALIDATION_ZH.md](docs/VALIDATION_ZH.md)**
+**CADP-CLIP 是本实现的工作名称，不是声称已有论文名称或已获验证的性能结论。**
 
-## 原始代码与新增代码分离
+## 从这里开始
 
-`PPM_CLIP/` 固定上游提交 `09d05b9fc4be6a2b079356bbf337a05e193db0be`，原始文件不修改；根目录亦保留上游副本。新方法在 `aigcdetect/`，配置在 `configs/`，命令入口在 `tools/`，全量实验脚本在 `scripts/`。用 `python tools/verify_upstream.py` 检查原版文件哈希。
+- [完整中文运行指南：从零安装到全量实验](docs/RUN_GUIDE_ZH.md)
+- [公式到代码映射与实现约定](docs/METHOD_MAPPING_ZH.md)
+- [实验协议与全部实验矩阵](docs/EXPERIMENTS_ZH.md)
+- [实际测试范围及限制](docs/VALIDATION_REPORT.md)
+- [第三方代码与数据来源](docs/THIRD_PARTY_NOTICE.md)
 
-旧 `requirements.txt` 属于原版；新项目使用 **environment.yml + requirements-runtime.txt**。
+**交付/上传状态与补丁发布方式见 [docs/DELIVERY_STATUS.md](docs/DELIVERY_STATUS.md)。**
 
-## 安装与本地资源
-
-```bash
-git clone --recurse-submodules https://github.com/rita2126top-alt/aigcdetect.git
-cd aigcdetect
-conda env create -f environment.yml
-conda activate aigcdetect
-python -m pip install -e . --no-deps
-mkdir -p "$HOME/aigcdetect_configs"
-cp configs/default.yaml "$HOME/aigcdetect_configs/genimage.yaml"
-export CONFIG="$HOME/aigcdetect_configs/genimage.yaml"
-# 编辑CONFIG里的模型、下载、train/val/test与输出本地路径。
-bash scripts/download_clip.sh
-bash scripts/download_genimage_hf.sh --mode paper
-python tools/prepare_genimage.py --config "$CONFIG"
-python tools/audit_data.py --config "$CONFIG" --hash --decode
-python tools/check_env.py --config "$CONFIG" --stage all --forward --backward
-```
-
-GenImage以原始图片字节导出，不二次JPEG编码；从训练源按内容分组划分独立验证集，不使用镜像的test/validation别名选模。默认数据协议是本项目的显式工程配置，不冒充上游论文原划分。
-
-## 全量训练与实验
+正式入口是 `python -m cadp.cli`。默认配置 `configs/cadp/default.yaml` 使用**本地 ViT-L/14 权重、100 epochs、有效 batch size 48、测试 10 个概率样本**，不是 smoke 配置。
 
 ```bash
-# 默认100轮，不是smoke脚本。
-bash scripts/run_train_genimage.sh
-# 将checkpoint路径改为CONFIG中实际output_dir下的best.pt。
-bash scripts/run_eval_genimage.sh outputs/genimage_full/best.pt
-bash scripts/run_robustness.sh outputs/genimage_full/best.pt
-# 7个方法配置×3个随机种子，各自训练与评测。
-bash scripts/run_ablations.sh --seeds 0,1,2
-# 同样21个任务，并为每个checkpoint增加所有配置鲁棒性条件。
-bash scripts/run_all_experiments.sh --seeds 0,1,2
+# 在 conda 环境中安装 GPU 版依赖后，使用你已经准备好的真实数据配置。
+python -m cadp.cli preflight --config /data/aigcdetect/manifests/sd14.yaml
+bash scripts/cadp/full.sh /data/aigcdetect/manifests/sd14.yaml /data/aigcdetect/experiments main
 ```
 
-模型/数据只从本地路径读取；显式下载入口才访问网络。评测自动恢复checkpoint对应的模型与消融配置，默认只读取测试域。支持epoch边界续训、优化器/调度器/scaler/RNG保存、分块文本计算和梯度累积、逐图CSV/域间macro/种子均值标准差。另提供Ojha8域和19域配置与官方下载工具。
+`full.sh ... all` 执行主方法、14 个消融、鲁棒性、MC 样本数及效率实验；八训练源 × 八测试源矩阵用 `cross-source` 单独执行。每个训练任务使用全部 manifest 数据和配置中的全部 epoch；没有隐藏的图片数截断。
 
-## 检查与交付边界
+## 原始文件保持不变
+
+原始来源：`bandaidssssss/PPM_CLIP`，固定 commit `09d05b9fc4be6a2b079356bbf337a05e193db0be`。
 
 ```bash
-python tools/validate_delivery.py --output validation
+export PYTHONDONTWRITEBYTECODE=1
+python -m cadp.cli verify-upstream
 ```
 
-本地35项CPU集成测试通过，包含真正的上游小型随机CLIP前后向、六种消融、训练/保存/恢复/评测/单图推理、Arrow原字节导出。**这不等于正式预训练模型GPU全量实验已经跑完。** 详细记录在 `provenance/local_validation.json`，GitHub复验见Actions及发布时生成的CI记录。没有编造实验成绩。
+`provenance/upstream.json` 保存 47 个上游文件的 SHA256，包括原仓库已经跟踪的二进制文件。校验目标是 `PPM_CLIP/` 固定子模块；根目录的原始 Python 文件也未改动。README、指南与包配置按新入口更新，旧 `aigcdetect/` 实验代码仅保留供追溯。导入的是该 commit 的文件快照，不是复制整个上游 Git 历史。
 
-原版启动入口只保留原算法行为：其固定提交用测试分数驱动早停，不能不加说明地作为无泄漏公平比较；详见教程第13节。
+## 功能边界
+
+已实现本地数据/权重、训练、恢复、验证选模、多域测试、单图/文件夹推理、阈值校准、注意力导出、多个随机种子、消融/退化/采样数实验和结果汇总。提供同一数据清单上的原始 PPM 架构对照入口。
+
+CPU 自动化测试使用真实上游 CLIP 模块构建的缩小随机网络，而非伪造网络输出。**这不等于真实 ViT-L/14 预训练权重的 GPU 全量训练验收，不代表检测准确率得到验证。** 请按指南在真实服务器运行 `preflight`，再启动正式实验。

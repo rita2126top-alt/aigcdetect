@@ -1,0 +1,56 @@
+{
+  "remote_base_commit": "4e4eac9152ebc1a87afe858d7bac98d50109f32d",
+  "upstream_commit": "09d05b9fc4be6a2b079356bbf337a05e193db0be",
+  "python": "3.13.5",
+  "platform": "Linux-6.18.44-x86_64-with-glibc2.41",
+  "cuda_available": false,
+  "tested_packages": {
+    "torch": "2.10.0+cpu",
+    "torchvision": "0.25.0+cpu",
+    "numpy": "2.3.5",
+    "Pillow": "12.3.0",
+    "scikit-learn": "1.8.0",
+    "PyYAML": "6.0.3",
+    "ftfy": "6.3.1",
+    "datasets": "3.6.0",
+    "pyarrow": "20.0.0",
+    "huggingface_hub": "0.34.4",
+    "pytest": "9.0.2"
+  },
+  "pytest": {
+    "passed": 55,
+    "failed": 0,
+    "warnings": 2
+  },
+  "source_check": {
+    "passed": true,
+    "counts": {
+      "python": 73,
+      "shell": 16,
+      "yaml": 13,
+      "modules": 14,
+      "cli_commands": 20
+    },
+    "upstream": {
+      "passed": true,
+      "files": 47,
+      "upstream_commit": "09d05b9fc4be6a2b079356bbf337a05e193db0be",
+      "checked_root": "/mnt/data/aigcdetect/PPM_CLIP"
+    },
+    "warnings": [
+      "PPM_CLIP/networks/PFL.py:156: SyntaxWarning: invalid escape sequence '\\s'",
+      "PPM_CLIP/networks/PFL.py:240: SyntaxWarning: invalid escape sequence '\\s'",
+      "networks/PFL.py:156: SyntaxWarning: invalid escape sequence '\\s'",
+      "networks/PFL.py:240: SyntaxWarning: invalid escape sequence '\\s'"
+    ],
+    "errors": [],
+    "note": "Source compilation and import checks do not execute full CUDA experiments."
+  },
+  "cli_smoke_exit_code": 0,
+  "legacy_cpu_bf16_train_exit_code": 0,
+  "executed_small_suite_jobs": 9,
+  "skipped_on_completed_rerun": 9,
+  "remote_pushed": false,
+  "full_pretrained_gpu_training_run": false,
+  "real_dataset_downloaded": false
+}

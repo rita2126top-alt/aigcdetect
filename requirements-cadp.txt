@@ -1,0 +1,14 @@
+# Install torch/torchvision separately for the intended CPU/CUDA runtime.
+numpy>=1.26,<3
+Pillow>=10.4,<13
+scikit-learn>=1.6,<2
+PyYAML>=6,<7
+ftfy==6.3.1
+regex>=2024.11.6
+tqdm>=4.67,<5
+loguru>=0.7,<1
+pytest>=8,<10
+huggingface_hub==0.34.4
+datasets==3.6.0
+pyarrow==20.0.0
+gdown>=5.2,<6

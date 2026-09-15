@@ -1,0 +1,9 @@
+name: cadp
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - git
+  - pip:
+      - -r requirements-cadp.txt

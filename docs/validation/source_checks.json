@@ -1,0 +1,24 @@
+{
+  "passed": true,
+  "counts": {
+    "python": 73,
+    "shell": 16,
+    "yaml": 13,
+    "modules": 14,
+    "cli_commands": 20
+  },
+  "upstream": {
+    "passed": true,
+    "files": 47,
+    "upstream_commit": "09d05b9fc4be6a2b079356bbf337a05e193db0be",
+    "checked_root": "/mnt/data/aigcdetect/PPM_CLIP"
+  },
+  "warnings": [
+    "PPM_CLIP/networks/PFL.py:156: SyntaxWarning: invalid escape sequence '\\s'",
+    "PPM_CLIP/networks/PFL.py:240: SyntaxWarning: invalid escape sequence '\\s'",
+    "networks/PFL.py:156: SyntaxWarning: invalid escape sequence '\\s'",
+    "networks/PFL.py:240: SyntaxWarning: invalid escape sequence '\\s'"
+  ],
+  "errors": [],
+  "note": "Source compilation and import checks do not execute full CUDA experiments."
+}

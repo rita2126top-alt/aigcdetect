@@ -1,0 +1,10 @@
+usage: cli.py [-h]
+              {write-config,verify-upstream,doctor,download-model,download-data,extract,scan,split,prepare-protocol,export-arrow,audit,preflight,train,evaluate,predict,calibrate,benchmark,suite,aggregate,toy-data} ...
+
+Class-Anchored Dynamic Probabilistic CLIP (CADP-CLIP)
+
+positional arguments:
+  {write-config,verify-upstream,doctor,download-model,download-data,extract,scan,split,prepare-protocol,export-arrow,audit,preflight,train,evaluate,predict,calibrate,benchmark,suite,aggregate,toy-data}
+
+options:
+  -h, --help            show this help message and exit
