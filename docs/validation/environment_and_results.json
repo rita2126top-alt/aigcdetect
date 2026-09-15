@@ -50,7 +50,29 @@
   "legacy_cpu_bf16_train_exit_code": 0,
   "executed_small_suite_jobs": 9,
   "skipped_on_completed_rerun": 9,
-  "remote_pushed": false,
+  "remote_pushed": true,
   "full_pretrained_gpu_training_run": false,
-  "real_dataset_downloaded": false
+  "real_dataset_downloaded": false,
+  "publication": {
+    "implementation_commit": "d137f74a5c432797f9a6515601ac327d10cd1514",
+    "github_actions_run_id": 34974737395,
+    "github_actions_conclusion": "success",
+    "github_actions_pytest": {
+      "tests": 55,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "github_actions_source_check": {
+      "passed": true,
+      "python": 89,
+      "shell": 16,
+      "yaml": 17,
+      "modules": 14,
+      "cli_commands": 20,
+      "upstream_files": 47
+    },
+    "validation_artifact_id": 10397844379,
+    "validation_artifact_digest": "sha256:20d070b00a77b890e644bdb5ebf165b46cc26bc448d038e24a13c8ea7a7e9797"
+  }
 }

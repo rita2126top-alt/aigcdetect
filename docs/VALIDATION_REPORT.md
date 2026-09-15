@@ -2,13 +2,14 @@
 
 ## 结论
 
-新增 CADP 实现、运行基础设施和文档已在本会话工作目录完成；**本次新增文件尚未推送 GitHub**。截至本次核对，远程 main 仍为 `4e4eac9152ebc1a87afe858d7bac98d50109f32d`。上传限制和应用补丁步骤见 `DELIVERY_STATUS.md`。
+新增 CADP 实现、运行基础设施和文档已完成，并成功上传至 `rita2126top-alt/aigcdetect` 的 `main`。实现提交为 `d137f74a5c432797f9a6515601ac327d10cd1514`；GitHub Actions 发布验证 run `34974737395` 结论为 `success`。该远程运行再次得到 **55 tests、0 failures、0 errors、0 skipped**，并核对 PPM-CLIP 47/47 文件。当前发布状态见 `DELIVERY_STATUS.md`。
 
 ## 实际执行的检查
 
 | 检查 | 结果 | 记录 |
 |---|---|---|
 | CADP 自动化测试 | **55 passed，0 failed，2 warnings** | `validation/pytest.log`、`validation/pytest.xml` |
+| GitHub Actions 远程复核 | **55 tests，0 failures/errors/skipped；source check passed** | run `34974737395`、artifact `cadp-v02-validation-evidence` |
 | Python 源码解析/编译（不生成 pyc） | 73 文件通过 | `validation/source_checks.json` |
 | Shell `bash -n` | 16 脚本通过 | 同上 |
 | YAML 解析 | 13 文件通过 | 同上 |
@@ -42,7 +43,7 @@ Shell 流程实际执行 toy-data → preflight（真实前向、反向、优化
 
 ## 没有执行的内容
 
-未下载正式 ViT-L/14 预训练文件及全量 GenImage；未连接用户远程服务器；未执行真实 CUDA FP16/BF16、GPU 峰值显存测试或100-epoch正式训练；未完成45训练/126任务的真实数据实验；未证明泛化性能优于 PPM-CLIP；未运行远程 GitHub Actions。项目明确只支持每个实验单设备，不宣称支持 DDP。
+未下载正式 ViT-L/14 预训练文件及全量 GenImage；未连接用户远程 GPU 服务器；未执行真实 CUDA FP16/BF16、GPU 峰值显存测试或100-epoch正式训练；未完成45训练/126任务的真实数据实验；未证明泛化性能优于 PPM-CLIP。GitHub Actions 已完成 CPU 复核，但这不替代 GPU 实验。项目明确只支持每个实验单设备，不宣称支持 DDP。
 
 原 PPM 对照保留其模型结构，但采用本项目的清单、验证选模和设备适配，必须标为 matched-harness baseline，不是原论文数值复现。旧 `aigcdetect/` 与旧 `tools/` 保留供追溯，本报告的运行测试针对新 `cadp/` 入口；旧入口仅做了源码语法检查。
 
