@@ -108,13 +108,18 @@ class ProbabilisticPromptFlow(nn.Module):
             nn.Linear(latent_dim, hidden_dim), nn.GELU(), nn.Linear(hidden_dim, image_dim)
         )
 
-    def forward(self, image_features: torch.Tensor, sample_num: int):
+    def forward(self, image_features: torch.Tensor, sample_num: int,
+                eps_shared: torch.Tensor | None = None,
+                eps_private: torch.Tensor | None = None):
         bsz = image_features.shape[0]
         dtype, device = image_features.dtype, image_features.device
 
         smu = self.shared_mu.to(dtype=dtype)
-        slv = self.shared_logvar.to(dtype=dtype)
-        eps_s = torch.randn(sample_num, self.latent_dim, device=device, dtype=dtype)
+        slv = self.shared_logvar.to(dtype=dtype).clamp(-10.0, 10.0)
+        eps_s = (torch.randn(sample_num, self.latent_dim, device=device, dtype=dtype)
+                 if eps_shared is None else eps_shared.to(device=device, dtype=dtype))
+        if eps_s.shape != (sample_num, self.latent_dim):
+            raise ValueError("Shared noise shape must be [samples, latent_dim]")
         z0_s = smu[None] + torch.exp(0.5 * slv)[None] * eps_s
         z_s, ld_s = self.shared_flow(z0_s)
         logq0_s = gaussian_log_prob(z0_s, smu[None], slv[None])
@@ -123,7 +128,10 @@ class ProbabilisticPromptFlow(nn.Module):
         stats = self.private_stats(image_features)
         pmu, plv = stats.chunk(2, dim=-1)
         plv = plv.clamp(-10.0, 10.0)
-        eps_p = torch.randn(bsz, sample_num, self.latent_dim, device=device, dtype=dtype)
+        eps_p = (torch.randn(bsz, sample_num, self.latent_dim, device=device, dtype=dtype)
+                 if eps_private is None else eps_private.to(device=device, dtype=dtype)[None].expand(bsz, -1, -1))
+        if eps_p.shape != (bsz, sample_num, self.latent_dim):
+            raise ValueError("Private base noise shape must be [samples, latent_dim]")
         z0_p = pmu[:, None] + torch.exp(0.5 * plv)[:, None] * eps_p
         z_p, ld_p = self.private_flow(z0_p, image_features)
         logq0_p = gaussian_log_prob(z0_p, pmu[:, None], plv[:, None])

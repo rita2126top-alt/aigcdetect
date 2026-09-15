@@ -1,24 +1,9 @@
+extends: default.yaml
 paths:
-  ppmclip_root: ./PPM_CLIP
-  clip_model: ./weights/clip/ViT-L-14.pt
   output_dir: ./outputs/ojha_full
-runtime: {device: cuda:0}
-model:
-  backbone: ViT-L/14
-  lora: {position: half-up, target: qkv, rank: 4, alpha: 0.5, dropout: 0.0}
-  dct_select_rate: 0.5
-  dct_margin: 1.0
-  prompt: {repositories: 2, shared_tokens: 3, private_max: 7, private_candidates: [1,3,5,7], train_samples: 1, test_samples: 10, router_hidden: 512}
-  flow: {layers: 10, hidden_dim: 1024, rho_shared: 0.1, rho_private: 0.1}
-  cross_attention: {dim: 256, heads: 4, ffn_ratio: 4, dropout: 0.1, alpha_max: 0.5, alpha_init: 0.1}
 data:
-  train_root: ./datasets/ForenSynths_4classtrain_val_test/train
-  val_root: ./datasets/ForenSynths_4classtrain_val_test/val
+  train_root: ./datasets/ForenSynths/train
+  val_root: ./datasets/ForenSynths/val
   test_root: ./datasets/UniversalFakeDetect_test
+  train_classes: [car, cat, chair, horse]
   test_sets: [dalle, glide_100_10, glide_100_27, glide_50_27, guided, ldm_100, ldm_200, ldm_200_cfg]
-  num_workers: 8
-  load_size: 256
-  image_size: 224
-training: {seed: 0, epochs: 100, batch_size: 48, lr_new: 1.0e-4, lr_lora: 1.0e-5, weight_decay: 1.0e-4, amp: true, grad_clip: 5.0, selection_metric: ap, resume: null}
-loss: {rec: 0.5, kl: 0.001, patch: 0.5, anchor: 0.001, len: 0.001}
-ablation: {disable_cross_attention: false, disable_dynamic_length: false, disable_probabilistic_prompt: false, disable_dct_loss: false}

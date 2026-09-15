@@ -1,0 +1,5 @@
+extends: ojha.yaml
+paths:
+  output_dir: ./outputs/ojha_19
+data:
+  test_sets: [progan, cyclegan, biggan, stylegan, gaugan, stargan, deepfake, crn, imle, san, sitd, dalle, glide_100_10, glide_100_27, glide_50_27, guided, ldm_100, ldm_200, ldm_200_cfg]

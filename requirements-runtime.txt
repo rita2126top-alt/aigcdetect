@@ -1,0 +1,14 @@
+numpy>=1.26,<3
+Pillow>=10.4,<12
+scikit-learn==1.6.1
+PyYAML==6.0.2
+tqdm==4.67.1
+loguru==0.7.3
+ftfy==6.3.1
+regex==2024.11.6
+huggingface_hub==0.34.4
+datasets==3.6.0
+pyarrow==20.0.0
+gdown==5.2.0
+pytest>=8.3,<10
+tensorboard==2.20.0

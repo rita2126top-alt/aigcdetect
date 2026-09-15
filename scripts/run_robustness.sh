@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
-CKPT="${1:-outputs/genimage_full/best.pt}"
-python tools/eval_robustness.py --config configs/default.yaml --checkpoint "$CKPT"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+: "${1:?Usage: bash scripts/run_robustness.sh /path/best.pt [options]}"
+CKPT="$1"; shift
+python tools/eval_robustness.py --config "${CONFIG:-configs/default.yaml}" --checkpoint "$CKPT" "$@"

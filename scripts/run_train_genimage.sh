@@ -1,3 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
-python tools/train.py --config configs/default.yaml "$@"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+python tools/train.py --config "${CONFIG:-configs/default.yaml}" "$@"

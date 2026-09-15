@@ -1,0 +1,12 @@
+{
+  "python": "3.13.5",
+  "platform": "Linux-6.18.44-x86_64-with-glibc2.41",
+  "parsed_python_files": 37,
+  "static_checks": "passed",
+  "gpu_training_tested": false,
+  "scope": "Actual upstream tiny random CLIP CPU integration; not pretrained detection accuracy",
+  "torch": "2.10.0+cpu",
+  "cuda_available": false,
+  "tests": 35,
+  "cpu_tests": "passed"
+}

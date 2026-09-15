@@ -1,0 +1,15 @@
+{
+  "python": "3.10.21",
+  "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+  "parsed_python_files": 37,
+  "static_checks": "passed",
+  "gpu_training_tested": false,
+  "scope": "Actual upstream tiny random CLIP CPU integration; not pretrained detection accuracy",
+  "torch": "2.5.1+cpu",
+  "cuda_available": false,
+  "tests": 35,
+  "cpu_tests": "passed",
+  "workflow_run_id": "34941931062",
+  "staging_commit": "bdc7e74877969a10a9c823aaa9b7b51c17588dd6",
+  "package_sha256": "32188e0849e19d165639dd20f1fe36e7ddaf021c3249326a47e4a6f5a6c6779d"
+}
