@@ -1,0 +1,42 @@
+name: Import pinned original PPM-CLIP
+on:
+  push:
+    paths: ['.github/workflows/import-upstream.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Preserve upstream files byte-for-byte
+        shell: bash
+        run: |
+          set -euo pipefail
+          upstream=09d05b9fc4be6a2b079356bbf337a05e193db0be
+          if test -f provenance/upstream.json; then
+            echo 'Pinned upstream already imported; no files replaced.'
+          else
+            git fetch https://github.com/bandaidssssss/PPM_CLIP.git "$upstream"
+            git archive "$upstream" | tar -x
+            mkdir -p provenance
+            python - <<'PY'
+          import hashlib, json, pathlib, subprocess
+          commit = '09d05b9fc4be6a2b079356bbf337a05e193db0be'
+          paths = subprocess.check_output(['git','ls-tree','-r','--name-only',commit], text=True).splitlines()
+          records = {p: hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest() for p in paths}
+          pathlib.Path('provenance/upstream.json').write_text(json.dumps({'repository':'bandaidssssss/PPM_CLIP','commit':commit,'sha256':records}, indent=2)+'\n')
+          PY
+            git add -f .gitignore clip loralib networks __pycache__ data_loading.py main.py options.py requirements.txt test.py validation.py provenance/upstream.json
+            git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'Import original PPM-CLIP at 09d05b9 without modifying any upstream files'
+            git push origin HEAD:main
+          fi
+          git archive --format=zip -o /tmp/aigcdetect-upstream.zip HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aigcdetect-upstream
+          path: /tmp/aigcdetect-upstream.zip
