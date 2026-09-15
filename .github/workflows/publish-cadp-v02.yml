@@ -1,0 +1,133 @@
+name: Publish validated CADP v0.2 delivery
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.delivery/cadp-v02.*'
+      - '.github/workflows/publish-cadp-v02.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: publish-cadp-v02
+  cancel-in-progress: false
+jobs:
+  verify-and-publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+      OMP_NUM_THREADS: '2'
+      MKL_NUM_THREADS: '2'
+      OPENBLAS_NUM_THREADS: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Verify and materialize exact CADP v0.2 archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import base64, hashlib, io, lzma, os, tarfile
+          from pathlib import Path, PurePosixPath
+
+          root = Path('.delivery')
+          before = [root/f'cadp-v02.part{i:02d}.xz' for i in (0, 1, 2)]
+          after = [root/f'cadp-v02.part{i:02d}.xz' for i in (4, 5, 6)]
+          chunks = [root/f'cadp-v02.part03.b64.{i:02d}' for i in range(14)]
+          assert all(p.is_file() for p in before + after + chunks)
+          encoded = ''.join(p.read_text(encoding='ascii') for p in chunks)
+          assert len(encoded) == 13336
+          part03 = base64.b64decode(encoded, validate=True)
+          assert len(part03) == 10000
+          packed = b''.join(p.read_bytes() for p in before) + part03 + b''.join(p.read_bytes() for p in after)
+          assert len(packed) == 65192
+          assert hashlib.sha256(packed).hexdigest() == 'e3c5c26d8fddfb40bfa493f6c985da8664196bb06c5ef4991562da2c1b4d6f7c'
+          raw = lzma.decompress(packed)
+          assert hashlib.sha256(raw).hexdigest() == '44a77abf51b23a0aeb9ecb2cdf932c0cc4956896452683b5ff1250bc5514e5b6'
+          names = []
+          with tarfile.open(fileobj=io.BytesIO(raw), mode='r:') as archive:
+              members = archive.getmembers()
+              assert len(members) == 54
+              assert len({m.name for m in members}) == 54
+              for member in members:
+                  name = PurePosixPath(member.name)
+                  assert not name.is_absolute() and '..' not in name.parts and '\n' not in member.name
+                  assert member.isfile() and not member.issym() and not member.islnk()
+                  mode = member.mode & 0o777
+                  assert mode in (0o644, 0o755)
+                  source = archive.extractfile(member)
+                  assert source is not None
+                  data = source.read()
+                  dest = Path(member.name)
+                  assert not dest.is_symlink()
+                  for parent in dest.parents:
+                      if parent == Path('.'):
+                          break
+                      assert not parent.is_symlink()
+                  dest.parent.mkdir(parents=True, exist_ok=True)
+                  temp = dest.with_name(dest.name + '.cadp-v02.tmp')
+                  temp.write_bytes(data)
+                  os.chmod(temp, mode)
+                  os.replace(temp, dest)
+                  assert hashlib.sha256(dest.read_bytes()).digest() == hashlib.sha256(data).digest()
+                  names.append(member.name)
+          Path('/tmp/cadp-v02-paths').write_bytes(b''.join(n.encode() + b'\0' for n in names))
+          print('Verified and materialized 54 files from the authenticated archive.')
+          PY
+          test "$(git rev-parse HEAD:PPM_CLIP)" = '09d05b9fc4be6a2b079356bbf337a05e193db0be'
+          test -z "$(git -C PPM_CLIP status --porcelain)"
+      - name: Install pinned CPU validation environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install torch==2.10.0 torchvision==0.25.0 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -r requirements-cadp.txt
+          python -m pip install -e . --no-deps
+      - name: Run source checks and 55 CPU correctness tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/cadp/check_sources.py --output /tmp/cadp-v02-source-checks.json
+          python -m pytest -c pytest-cadp.ini -p no:cacheprovider -q --junitxml=/tmp/cadp-v02-pytest.xml
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          root = ET.parse('/tmp/cadp-v02-pytest.xml').getroot()
+          suites = [root] if root.tag == 'testsuite' else list(root.findall('testsuite'))
+          totals = {k: sum(int(s.attrib.get(k, 0)) for s in suites) for k in ('tests', 'failures', 'errors', 'skipped')}
+          assert totals == {'tests': 55, 'failures': 0, 'errors': 0, 'skipped': 0}, totals
+          print(totals)
+          PY
+      - name: Commit and fast-forward main without force
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          while IFS= read -r -d '' path; do git add -- "$path"; done < /tmp/cadp-v02-paths
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo 'Validated CADP v0.2 files are already current.'
+            exit 0
+          fi
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$GITHUB_SHA"
+          git commit -m 'Publish validated CADP v0.2 implementation, experiments and guide'
+          git push origin HEAD:main
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cadp-v02-validation-evidence
+          path: |
+            /tmp/cadp-v02-source-checks.json
+            /tmp/cadp-v02-pytest.xml
+          if-no-files-found: warn
+          retention-days: 30
