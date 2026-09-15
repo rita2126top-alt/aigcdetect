@@ -1,0 +1,21 @@
+name: Offline Arrow test dependencies
+on:
+  push:
+    paths: ['.github/workflows/arrow-test-deps.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  wheels:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -m pip download datasets==3.6.0 pyarrow==20.0.0 huggingface_hub==0.34.4 --only-binary=:all: --dest wheels
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arrow-test-wheels
+          path: wheels/
+          retention-days: 7
