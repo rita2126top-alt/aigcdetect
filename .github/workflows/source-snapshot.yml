@@ -1,0 +1,32 @@
+name: Source snapshot for offline verification
+on:
+  push:
+    paths: ['.github/workflows/source-snapshot.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Bundle exact sources and tokenizer wheels
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/aigcdetect-audit/wheels
+          git rev-parse HEAD > /tmp/aigcdetect-audit/COMMIT.txt
+          tar --exclude='./.git' --exclude='./PPM_CLIP/.git' -czf /tmp/aigcdetect-audit/source.tar.gz .
+          python -m pip download ftfy==6.3.1 --dest /tmp/aigcdetect-audit/wheels
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aigcdetect-audit-snapshot
+          path: /tmp/aigcdetect-audit/
+          retention-days: 14
